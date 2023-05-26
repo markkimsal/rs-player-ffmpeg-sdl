@@ -6,3 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+libc = "^0.2.144"
+libloading = "^0.8"
+rusty_ffmpeg = { version = "^0.13.1+ffmpeg.6.0", features = ["ffmpeg5"] }
+sdl2 = "^0.35.2"
