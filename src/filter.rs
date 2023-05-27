@@ -1,5 +1,5 @@
 
-#![allow(unused_variables)]
+#![allow(unused_variables, non_camel_case_types)]
 use std::ffi::{CString, CStr};
 use rusty_ffmpeg::ffi::{self};
 
