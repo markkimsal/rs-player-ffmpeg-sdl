@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 use std::ffi::CStr;
 use std::ffi::CString;
+use std::ops::Deref;
 use std::panic::panic_any;
 use std::ptr;
 use std::ptr::NonNull;
@@ -36,8 +37,23 @@ use sdl2::sys::SDL_UpdateTexture;
 use sdl2::sys::SDL_UpdateYUVTexture;
 use sdl2::video::Window;
 
+use crate::filter::RotateFilter;
+
+// #[path="filter.rs"]
+// mod filter;
+fn rotation_filter_init() -> crate::filter::RotateFilter {
+    unsafe {
+        crate::filter::RotateFilter {
+            filter_graph: ffi::avfilter_graph_alloc(),
+            buffersink_ctx: std::ptr::null_mut(),
+            buffersrc_ctx:  std::ptr::null_mut(),
+        }
+    }
+}
 
 pub fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFormatContext, &mut ffi::AVCodecContext) {
+
+// unsafe {ffi::av_log_set_level(ffi::AV_LOG_DEBUG as i32)};
     let filepath: CString = CString::new(src).unwrap();
     let mut format_ctx = unsafe { ffi::avformat_alloc_context() };
 
@@ -131,10 +147,24 @@ pub fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFormatContext,
 }
 
 pub fn open_window(format_context: *mut ffi::AVFormatContext, codec_context: &mut ffi::AVCodecContext) {
+
+    let rotation = unsafe { get_orientation_metadata_value(format_context) };
+    let mut rotate_filter = rotation_filter_init();
+    crate::filter::init_filter(
+        rotation,
+        &mut rotate_filter.filter_graph,
+        &mut rotate_filter.buffersink_ctx,
+        &mut rotate_filter.buffersrc_ctx
+    );
+
+    let (window_width, window_height): (u32, u32) = match rotation {
+        90 => (codec_context.height as u32, codec_context.width as u32),
+        _  => (codec_context.width as u32, codec_context.height as u32)
+    };
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
 
-    let window = video_subsystem.window("rs-player-ffmpeg-sdl2", 800, 600)
+    let window = video_subsystem.window("rs-player-ffmpeg-sdl2", window_width, window_height)
         .position_centered()
         .build()
         .unwrap();
@@ -150,8 +180,8 @@ pub fn open_window(format_context: *mut ffi::AVFormatContext, codec_context: &mu
     let mut texture = texture_creator.create_texture(
         Some(PixelFormatEnum::ARGB32),
         TextureAccess::Streaming,
-        width,
-        height
+        height,
+        width
     ).unwrap();
     let frame =
         unsafe { ffi::av_frame_alloc().as_mut() }
@@ -200,7 +230,7 @@ pub fn open_window(format_context: *mut ffi::AVFormatContext, codec_context: &mu
         {
             if video_stream_index == Some(packet.stream_index as usize) {
                 if let Ok(_) = decode_packet(packet, codec_context, frame) {
-                    blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx).unwrap_or_default();
+                    blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
                 }
             }
             unsafe { ffi::av_packet_unref(packet) };
@@ -256,6 +286,7 @@ fn blit_frame(
     canvas: &mut Canvas<Window>,
     texture: &mut Texture,
     sws_ctx: *mut SwsContext,
+    filter: &crate::filter::RotateFilter,
 ) -> Result<(), String> {
             dest_frame.height = 600;
             dest_frame.width  = 800;
@@ -273,9 +304,14 @@ fn blit_frame(
                 dest_frame.linesize.as_mut_ptr())
             };
 
+    let new_frame = frame_thru_filter(filter, dest_frame);
+    // unsafe { SDL_UpdateTexture(
+    //     texture.raw(), ptr::null(),
+    //     (*dest_frame).data[0] as _, (*dest_frame).linesize[0] as _
+    // ) };
     unsafe { SDL_UpdateTexture(
         texture.raw(), ptr::null(),
-        (*dest_frame).data[0] as _, (*dest_frame).linesize[0] as _
+        (new_frame).data[0] as _, (new_frame).linesize[0] as _
     ) };
 
     // SDL cannot handle YUV(J)420P
@@ -287,4 +323,74 @@ fn blit_frame(
     // ) };
     canvas.copy(texture, None, None)
     // unsafe { SDL_RenderCopy(canvas, texture.raw(), ptr::null(), ptr::null()) }
+}
+
+
+fn frame_thru_filter(filter: &crate::filter::RotateFilter, frame: &mut AVFrame) -> AVFrame
+{
+    let filt_frame =
+        unsafe { ffi::av_frame_alloc().as_mut() }
+        .expect("failed to allocated memory for AVFrame");
+
+    filt_frame.width  = 800;
+    filt_frame.height = 600;
+    filt_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
+    unsafe { ffi::av_frame_get_buffer(filt_frame, 0) };
+
+
+	let mut result = unsafe { ffi::av_buffersrc_add_frame(filter.buffersrc_ctx, frame) };
+
+    loop {
+        unsafe {
+            result =  ffi::av_buffersink_get_frame(filter.buffersink_ctx, filt_frame);
+            // if result == ffi::AVERROR(ffi::EOF)  { break; }
+            if result != ffi::AVERROR(ffi::EAGAIN)  { break; }
+        }
+    }
+
+	return *filt_frame;
+}
+
+
+
+unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) -> i32 {
+    let key_name = CString::new("rotate").unwrap();
+	let tag: *mut ffi::AVDictionaryEntry = ffi::av_dict_get(
+        (*format_ctx).metadata,
+        key_name.as_ptr() as *const _,
+        std::ptr::null(),
+        0
+    );
+	if !tag.is_null() {
+		return libc::atoi((*tag).value);
+	}
+    eprintln!(" 🔄 got no rotation tag.");
+    // let streams = NonNull::<ffi::AVStream>::new((*format_ctx).streams as *mut _).unwrap();
+    eprintln!(" 🔄 nb_streams ptr is {:?}", (*format_ctx).nb_streams);
+    let mut rotation = 0.;
+    for i in 0..(*format_ctx).nb_streams as usize {
+        unsafe {
+            let mut _ptr = NonNull::new((*format_ctx).streams as *mut _).unwrap();
+            let stream_ptr = ((*format_ctx).streams as *mut *mut ffi::AVStream).add(i);
+            // let s = Box::<ffi::AVStream>::from_raw(*_ptr.as_ptr());
+            let s = Box::<ffi::AVStream>::from_raw(*stream_ptr);
+            eprintln!(" 🔄 streams nb_side_data is {:?}",s.nb_side_data);
+            if !s.side_data.is_null() {
+                let _display_matrix = ffi::av_stream_get_side_data(
+                    Box::into_raw(s) as *const _,
+                    ffi::AVPacketSideDataType_AV_PKT_DATA_DISPLAYMATRIX,
+                    std::ptr::null_mut()
+                );
+                eprintln!(" 🔄 displaymatrix is {:?}", _display_matrix);
+                rotation = -ffi::av_display_rotation_get(_display_matrix as *const i32);
+                eprintln!(" 🔄 rotation is {:?}", rotation);
+            } else {
+                // consume the box
+                let unptr = Box::into_raw(s);
+                std::ptr::drop_in_place(unptr);
+            }
+            return rotation as i32;
+        }
+    }
+    0
 }
