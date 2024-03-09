@@ -261,7 +261,7 @@ pub fn play_movie(movie_state: &MovieState) {
 
     let format_context = movie_state.format_context;
     // let codec_context = unsafe {movie_state.video_ctx.as_mut().unwrap()};
-    let codec_context = movie_state.video_ctx;
+    let codec_context = unsafe {movie_state.video_ctx.as_ref().unwrap()};
     let rotation = unsafe { get_orientation_metadata_value(format_context) };
     let mut rotate_filter = rotation_filter_init();
     crate::filter::init_filter(
@@ -276,8 +276,8 @@ pub fn play_movie(movie_state: &MovieState) {
     //     _  => (codec_context.width as u32 / 2, codec_context.height as u32 / 2)
     // };
     let (window_width, window_height): (u32, u32) = match rotation {
-        90 => (600, 800),
-        _  => (800, 600)
+        90 => (450, 800),
+        _  => (800, 450)
     };
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
@@ -288,8 +288,6 @@ pub fn play_movie(movie_state: &MovieState) {
         .unwrap();
 
     let mut canvas = window.into_canvas().build().unwrap();
-    let width = 800;
-    let height = 600;
 
     canvas.set_draw_color(Color::RGB(0, 255, 255));
     canvas.clear();
@@ -298,8 +296,8 @@ pub fn play_movie(movie_state: &MovieState) {
     let mut texture = texture_creator.create_texture(
         Some(PixelFormatEnum::ARGB32),
         TextureAccess::Streaming,
-        height,
-        width
+        window_width,
+        window_height
     ).unwrap();
     let frame =
         unsafe { ffi::av_frame_alloc().as_mut() }
@@ -310,14 +308,12 @@ pub fn play_movie(movie_state: &MovieState) {
         unsafe { ffi::av_frame_alloc().as_mut() }
         .expect("failed to allocated memory for AVFrame");
 
-    let width:i32 = 800;
-    let height:i32 = 600;
     let sws_ctx = unsafe { sws_getContext(
-        codec_context.as_ref().unwrap().width,
-        codec_context.as_ref().unwrap().height,
+        codec_context.width,
+        codec_context.height,
         AVPixelFormat_AV_PIX_FMT_YUV420P,
-        width,
-        height,
+        window_width as i32,
+        window_height as i32,
         AVPixelFormat_AV_PIX_FMT_ARGB,
         SWS_BILINEAR as i32,
         ptr::null_mut(),
@@ -362,7 +358,7 @@ pub fn play_movie(movie_state: &MovieState) {
             }
             {
                 if video_stream_index == Some(packet.stream_index as usize) {
-                    if let Ok(_) = decode_packet(packet, codec_context, frame) {
+                    if let Ok(_) = decode_packet(packet, movie_state.video_ctx.as_mut().unwrap(), frame) {
                         blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
                     }
                 }
@@ -422,7 +418,7 @@ fn blit_frame(
     sws_ctx: *mut SwsContext,
     filter: &crate::filter::RotateFilter,
 ) -> Result<(), String> {
-        dest_frame.height = 600;
+        dest_frame.height = 450;
         dest_frame.width  = 800;
         dest_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
         unsafe {
@@ -468,11 +464,10 @@ fn frame_thru_filter(filter: &crate::filter::RotateFilter, frame: &mut AVFrame) 
         unsafe { ffi::av_frame_alloc().as_mut() }
         .expect("failed to allocated memory for AVFrame");
 
-    filt_frame.width  = 800;
-    filt_frame.height = 600;
+    filt_frame.width  = frame.width;
+    filt_frame.height = frame.height;
     filt_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
     unsafe { ffi::av_frame_get_buffer(filt_frame, 0) };
-
 
 	let _ = unsafe { ffi::av_buffersrc_add_frame(filter.buffersrc_ctx, frame) };
 
