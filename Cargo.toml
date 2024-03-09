@@ -3,10 +3,16 @@ name = "rs-player-ffmpeg-sdl"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "rsplayer"
+path = "src/lib.rs"
+crate-type   = ["rlib", "cdylib"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 libc = "^0.2.144"
 libloading = "^0.8"
 rusty_ffmpeg = { version = "^0.13.1+ffmpeg.6.0", features = ["ffmpeg5"] }
+clap = { version = "4.0", features = ["derive"] }
 sdl2 = "^0.35.2"
