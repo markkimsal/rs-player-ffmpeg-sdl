@@ -37,7 +37,7 @@ pub fn init_filter(
         ffi::avfilter_graph_free(filter_graph) ;
         *filter_graph = ffi::avfilter_graph_alloc();
 
-        if (outputs.is_null() || inputs.is_null() || filter_graph.is_null()) {
+        if outputs.is_null() || inputs.is_null() || filter_graph.is_null() {
             ffi::avfilter_graph_config(*filter_graph as *mut _, std::ptr::null_mut());
             ffi::avfilter_inout_free(&mut inputs  as *mut _);
             ffi::avfilter_inout_free(&mut outputs  as *mut _);

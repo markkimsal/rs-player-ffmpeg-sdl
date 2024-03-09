@@ -38,6 +38,8 @@ use sdl2::sys::SDL_UpdateYUVTexture;
 use sdl2::video::Window;
 
 use crate::filter::RotateFilter;
+use crate::movie_state;
+use crate::movie_state::MovieState;
 
 // #[path="filter.rs"]
 // mod filter;
@@ -51,8 +53,116 @@ fn rotation_filter_init() -> crate::filter::RotateFilter {
     }
 }
 
-pub fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFormatContext, &mut ffi::AVCodecContext) {
+#[no_mangle]
+pub unsafe extern "C" fn a_function_from_rust() -> i32 {
+    42
+}
+#[no_mangle]
+#[allow(improper_ctypes_definitions)]
+pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
+    let filepath: CString = CString::new(src).unwrap();
+    let mut format_ctx = ffi::avformat_alloc_context();
 
+    let format     = ptr::null_mut();
+    let dict       = ptr::null_mut();
+    if {
+        ffi::avformat_open_input(&mut format_ctx, filepath.as_ptr(), format, dict)
+    } != 0 {
+        panic!("🚩 cannot open file")
+    }
+
+    if ffi::avformat_find_stream_info(format_ctx, ptr::null_mut()) < 0 {
+        panic!("ERROR could not get the stream info");
+    }
+    video_state.format_context = format_ctx.as_mut().unwrap();
+
+    ffi::av_dump_format(video_state.format_context, 0, filepath.as_ptr(), 0);
+
+    // let format_context = unsafe { format_ctx.as_mut() }.unwrap();
+    let streams = {
+        std::slice::from_raw_parts(video_state.format_context.as_ref().unwrap().streams, video_state.format_context.as_ref().unwrap().nb_streams as usize)
+    };
+    let mut codec_ptr: *const ffi::AVCodec = ptr::null_mut();
+    let mut codec_parameters_ptr: *const ffi::AVCodecParameters = ptr::null_mut();
+    let mut video_stream_index = None;
+    let mut time_base_den:i32 = 10000;
+    let mut _time_base_num:i32 = 10000;
+
+    for s in streams
+        .iter()
+        .map(|stream| unsafe { stream.as_ref() }.unwrap())
+        .enumerate()
+    {
+        let (i, &stream): (usize, &ffi::AVStream) = s;
+        println!(
+            "AVStream->time_base before open codec {}/{}",
+            stream.time_base.num, stream.time_base.den
+        );
+
+        let local_codec_params = stream.codecpar.as_ref()
+            .expect("ERROR: unable to dereference codec parameters");
+        let local_codec = ffi::avcodec_find_decoder(local_codec_params.codec_id).as_ref()
+            .expect("ERROR unsupported codec!");
+
+        match local_codec_params.codec_type {
+            ffi::AVMediaType_AVMEDIA_TYPE_VIDEO => {
+                if video_stream_index.is_none() {
+                    video_stream_index = Some(i);
+                    video_state.video_stream_idx = i as i64;
+                    video_state.video_stream_idx = i as i64;
+                    video_state.video_ctx = ffi::avcodec_alloc_context3(local_codec); //.as_mut().unwrap();
+
+                    codec_ptr = local_codec;
+                    codec_parameters_ptr = local_codec_params;
+                    time_base_den = stream.time_base.den;
+                    _time_base_num = stream.time_base.num;
+                }
+
+                println!(
+                    "Video Codec: resolution {} x {}",
+                    local_codec_params.width, local_codec_params.height
+                );
+                println!(
+                    "Video Codec: {} {:?}",
+                    local_codec_params.codec_id,
+                    unsafe {
+                        match (*local_codec).long_name.is_null()  {
+                            true => CStr::from_ptr((*local_codec).name),
+                            false => CStr::from_ptr((*local_codec).long_name),
+                        }
+                    },
+                );
+            },
+            _ => {}
+        }
+    }
+//    let codec_context = unsafe { ffi::avcodec_alloc_context3(codec_ptr).as_mut() }.unwrap();
+
+    if unsafe { ffi::avcodec_parameters_to_context(video_state.video_ctx, codec_parameters_ptr) } < 0 {
+        panic!("failed to copy codec params to codec context");
+    }
+    if ffi::avcodec_open2(video_state.video_ctx, codec_ptr, ptr::null_mut()) < 0 {
+        panic!("failed to open codec through avcodec_open2");
+    }
+
+
+    let mut dur_s = video_state.format_context.as_ref().unwrap().duration / 10000;
+    let dur_min = dur_s  / 6000; // (60 * time_base_den as i64);
+    // let dur_min = dur_s  /  (60 / time_base_den as i64);
+    dur_s -= dur_min * 6000; // (60 * time_base_den as i64);
+
+    let format_name = unsafe { CStr::from_ptr((*(*format_ctx).iformat).name) }
+        .to_str()
+        .unwrap();
+    println!(
+        "format {}, duration {:0>3}:{:0>2}, time_base {}",
+        format_name, dur_min, dur_s / 100 , time_base_den
+    );
+
+}
+
+#[allow(improper_ctypes_definitions)]
+pub extern "C" fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFormatContext, &mut ffi::AVCodecContext) {
 // unsafe {ffi::av_log_set_level(ffi::AV_LOG_DEBUG as i32)};
     let filepath: CString = CString::new(src).unwrap();
     let mut format_ctx = unsafe { ffi::avformat_alloc_context() };
@@ -146,8 +256,12 @@ pub fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFormatContext,
     (codec_ptr, format_context, codec_context)
 }
 
-pub fn open_window(format_context: *mut ffi::AVFormatContext, codec_context: &mut ffi::AVCodecContext) {
+// pub fn open_window(format_context: *mut ffi::AVFormatContext, codec_context: &mut ffi::AVCodecContext) {
+pub fn play_movie(movie_state: &MovieState) {
 
+    let format_context = movie_state.format_context;
+    // let codec_context = unsafe {movie_state.video_ctx.as_mut().unwrap()};
+    let codec_context = movie_state.video_ctx;
     let rotation = unsafe { get_orientation_metadata_value(format_context) };
     let mut rotate_filter = rotation_filter_init();
     crate::filter::init_filter(
@@ -157,9 +271,13 @@ pub fn open_window(format_context: *mut ffi::AVFormatContext, codec_context: &mu
         &mut rotate_filter.buffersrc_ctx
     );
 
+    // let (window_width, window_height): (u32, u32) = match rotation {
+    //     90 => (codec_context.height as u32 / 2, codec_context.width as u32 / 2),
+    //     _  => (codec_context.width as u32 / 2, codec_context.height as u32 / 2)
+    // };
     let (window_width, window_height): (u32, u32) = match rotation {
-        90 => (codec_context.height as u32, codec_context.width as u32),
-        _  => (codec_context.width as u32, codec_context.height as u32)
+        90 => (600, 800),
+        _  => (800, 600)
     };
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
@@ -195,8 +313,8 @@ pub fn open_window(format_context: *mut ffi::AVFormatContext, codec_context: &mu
     let width:i32 = 800;
     let height:i32 = 600;
     let sws_ctx = unsafe { sws_getContext(
-        codec_context.width,
-        codec_context.height,
+        codec_context.as_ref().unwrap().width,
+        codec_context.as_ref().unwrap().height,
         AVPixelFormat_AV_PIX_FMT_YUV420P,
         width,
         height,
@@ -226,15 +344,31 @@ pub fn open_window(format_context: *mut ffi::AVFormatContext, codec_context: &mu
         // The rest of the game loop goes here...
         let video_stream_index = Some(0);
 
-        unsafe { ffi::av_read_frame(format_context, packet) };
-        {
-            if video_stream_index == Some(packet.stream_index as usize) {
-                if let Ok(_) = decode_packet(packet, codec_context, frame) {
-                    blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
-                }
+        unsafe {
+            let response = ffi::av_read_frame(format_context, packet);
+            // if response == ffi::AVERROR(ffi::EAGAIN) || response == ffi::AVERROR_EOF {
+            if response == ffi::AVERROR_EOF {
+                println!("{}", String::from(
+                    "EOF",
+                ));
+                break 'running;
             }
-            unsafe { ffi::av_packet_unref(packet) };
-        }
+
+            if response < 0 {
+                println!("{}", String::from(
+                    "ERROR",
+                ));
+                break 'running;
+            }
+            {
+                if video_stream_index == Some(packet.stream_index as usize) {
+                    if let Ok(_) = decode_packet(packet, codec_context, frame) {
+                        blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
+                    }
+                }
+                ffi::av_packet_unref(packet);
+            }
+        };
 
         canvas.present();
         // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 240000));
@@ -243,8 +377,8 @@ pub fn open_window(format_context: *mut ffi::AVFormatContext, codec_context: &mu
 }
 
 fn decode_packet(
-    packet: &ffi::AVPacket,
-    codec_context: &mut ffi::AVCodecContext,
+    packet: *mut ffi::AVPacket,
+    codec_context: *mut ffi::AVCodecContext,
     frame: &mut ffi::AVFrame,
 ) -> Result<(), String> {
     let mut response = unsafe { ffi::avcodec_send_packet(codec_context, packet) };
@@ -263,18 +397,18 @@ fn decode_packet(
             return Err(String::from(
                 "Error while receiving a frame from the decoder.",
             ));
-        } else {
-            println!(
-                "Frame {} (type={}, size={} bytes) pts {} key_frame {} [DTS {}]",
-                codec_context.frame_number,
-                unsafe { ffi::av_get_picture_type_char(frame.pict_type) },
-                frame.pkt_size,
-                frame.pts,
-                frame.key_frame,
-                frame.pkt_dts
-            );
-            return Ok(());
         }
+        let codec_context = unsafe{codec_context.as_ref().unwrap()};
+        println!(
+            "Frame {} (type={}, size={} bytes) pts {} key_frame {} [DTS {}]",
+            codec_context.frame_number,
+            unsafe { ffi::av_get_picture_type_char(frame.pict_type) },
+            frame.pkt_size,
+            frame.pts * codec_context.time_base.num as i64 / codec_context.time_base.den as i64,
+            frame.key_frame,
+            frame.pkt_dts
+        );
+        return Ok(());
     }
     Ok(())
 }
@@ -288,21 +422,23 @@ fn blit_frame(
     sws_ctx: *mut SwsContext,
     filter: &crate::filter::RotateFilter,
 ) -> Result<(), String> {
-            dest_frame.height = 600;
-            dest_frame.width  = 800;
-            dest_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
-            unsafe { ffi::av_frame_get_buffer(dest_frame, 0) };
+        dest_frame.height = 600;
+        dest_frame.width  = 800;
+        dest_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
+        unsafe {
+            ffi::av_frame_get_buffer(&mut *dest_frame, 0);
 
-            unsafe { sws_scale(
+             sws_scale(
                 sws_ctx,
                 src_frame.data.as_ptr() as _,
                 src_frame.linesize.as_ptr(),
                 0,
-                1080,
+                720,
                 // codec_context.height,
                 dest_frame.data.as_mut_ptr(),
-                dest_frame.linesize.as_mut_ptr())
-            };
+                dest_frame.linesize.as_mut_ptr()
+            )
+        };
 
     let new_frame = frame_thru_filter(filter, dest_frame);
     // unsafe { SDL_UpdateTexture(
@@ -338,11 +474,11 @@ fn frame_thru_filter(filter: &crate::filter::RotateFilter, frame: &mut AVFrame) 
     unsafe { ffi::av_frame_get_buffer(filt_frame, 0) };
 
 
-	let mut result = unsafe { ffi::av_buffersrc_add_frame(filter.buffersrc_ctx, frame) };
+	let _ = unsafe { ffi::av_buffersrc_add_frame(filter.buffersrc_ctx, frame) };
 
     loop {
         unsafe {
-            result =  ffi::av_buffersink_get_frame(filter.buffersink_ctx, filt_frame);
+            let result =  ffi::av_buffersink_get_frame(filter.buffersink_ctx, filt_frame);
             // if result == ffi::AVERROR(ffi::EOF)  { break; }
             if result != ffi::AVERROR(ffi::EAGAIN)  { break; }
         }
