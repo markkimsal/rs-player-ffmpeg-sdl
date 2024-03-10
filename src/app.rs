@@ -268,7 +268,9 @@ pub fn play_movie(movie_state: &MovieState) {
         rotation,
         &mut rotate_filter.filter_graph,
         &mut rotate_filter.buffersink_ctx,
-        &mut rotate_filter.buffersrc_ctx
+        &mut rotate_filter.buffersrc_ctx,
+        (codec_context.width, codec_context.height),
+        codec_context.pix_fmt
     );
 
     // let (window_width, window_height): (u32, u32) = match rotation {
@@ -276,7 +278,8 @@ pub fn play_movie(movie_state: &MovieState) {
     //     _  => (codec_context.width as u32 / 2, codec_context.height as u32 / 2)
     // };
     let (window_width, window_height): (u32, u32) = match rotation {
-        90 => (450, 800),
+         90 => (450, 800),
+        -90 => (450, 800),
         _  => (800, 450)
     };
     let sdl_context = sdl2::init().unwrap();
@@ -296,6 +299,8 @@ pub fn play_movie(movie_state: &MovieState) {
     let mut texture = texture_creator.create_texture(
         Some(PixelFormatEnum::ARGB32),
         TextureAccess::Streaming,
+        // 800,450
+        // 450,800
         window_width,
         window_height
     ).unwrap();
@@ -418,25 +423,30 @@ fn blit_frame(
     sws_ctx: *mut SwsContext,
     filter: &crate::filter::RotateFilter,
 ) -> Result<(), String> {
-        dest_frame.height = 450;
-        dest_frame.width  = 800;
-        dest_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
-        unsafe {
-            ffi::av_frame_get_buffer(&mut *dest_frame, 0);
 
+        let  new_frame = frame_thru_filter(filter, src_frame);
+
+        // dest_frame.width  = new_frame.width;
+        // dest_frame.height = new_frame.height;
+        dest_frame.width  = canvas.window().size().0 as i32;
+        dest_frame.height = canvas.window().size().1 as i32;
+        dest_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
+
+        unsafe {
+            ffi::av_frame_get_buffer(dest_frame, 0);
              sws_scale(
                 sws_ctx,
-                src_frame.data.as_ptr() as _,
-                src_frame.linesize.as_ptr(),
+                new_frame.data.as_ptr() as _,
+                new_frame.linesize.as_ptr(),
                 0,
-                720,
+                new_frame.height,
                 // codec_context.height,
                 dest_frame.data.as_mut_ptr(),
                 dest_frame.linesize.as_mut_ptr()
             )
         };
 
-    let new_frame = frame_thru_filter(filter, dest_frame);
+    let new_frame = dest_frame;
     // unsafe { SDL_UpdateTexture(
     //     texture.raw(), ptr::null(),
     //     (*dest_frame).data[0] as _, (*dest_frame).linesize[0] as _
@@ -466,10 +476,17 @@ fn frame_thru_filter(filter: &crate::filter::RotateFilter, frame: &mut AVFrame) 
 
     filt_frame.width  = frame.width;
     filt_frame.height = frame.height;
-    filt_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
+    filt_frame.format = frame.format;
     unsafe { ffi::av_frame_get_buffer(filt_frame, 0) };
 
-	let _ = unsafe { ffi::av_buffersrc_add_frame(filter.buffersrc_ctx, frame) };
+	let result = unsafe { ffi::av_buffersrc_add_frame(filter.buffersrc_ctx, frame) };
+    if result < 0 {
+        if result == ffi::AVERROR_INVALIDDATA {
+            eprintln!("Invalid data while feeding the filtergraph.");
+        }
+        eprintln!("{}", ffi::av_err2str(result));
+        return *filt_frame;
+    }
 
     loop {
         unsafe {

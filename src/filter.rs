@@ -19,7 +19,9 @@ pub fn init_filter(
     rotation: i32,
     filter_graph: &mut *mut ffi::AVFilterGraph,
     buffersink_ctx: &mut *mut ffi::AVFilterContext,
-    buffersrc_ctx: &mut *mut ffi::AVFilterContext
+    buffersrc_ctx: &mut *mut ffi::AVFilterContext,
+    wh: (i32, i32),
+    format: i32,
 ) -> i32 {
 	let ret: i32 = 0;
     let buffer_src_name = CString::new("buffer").unwrap();
@@ -45,21 +47,25 @@ pub fn init_filter(
         }
     }
 
-    let width = 800;
-    let height = 600;
+    let width = wh.0;
+    let height = wh.1;
+    // let width = 450;
+    // let height = 800;
 	// assume source is AV_PIX_FMT_YUV420P;
 	/* buffer video source: the decoded frames from the decoder will be inserted here. */
     let args = format!(
         "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
         width, height,
-        ffi::AVPixelFormat_AV_PIX_FMT_ARGB,
+        // ffi::AVPixelFormat_AV_PIX_FMT_ARGB,
+        format as ffi::AVPixelFormat,
         time_base.num, time_base.den, 1, 1
     );
     let args = &CString::new(args).unwrap();
     println!(
         "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
         width, height,
-        ffi::AVPixelFormat_AV_PIX_FMT_ARGB,
+        // ffi::AVPixelFormat_AV_PIX_FMT_ARGB,
+        format as ffi::AVPixelFormat,
         time_base.num, time_base.den, 1, 1
     );
 
@@ -140,6 +146,7 @@ pub fn init_filter(
         let transpose = match rotation {
             90 => "transpose=1",
             270 => "transpose=2",
+            -90 => "transpose=3",
             _  => "tpad=0",
         };
         let filter_desc = CString::new(transpose).unwrap();
@@ -150,18 +157,11 @@ pub fn init_filter(
             &mut outputs as *mut _,
             std::ptr::null_mut()
         );
-        if ret < 0 {
-            ffi::avfilter_inout_free(&mut inputs  as *mut _);
-            ffi::avfilter_inout_free(&mut outputs  as *mut _);
-            return ret;
+        if ret >= 0 {
+            ffi::avfilter_graph_config(*filter_graph as *mut _, std::ptr::null_mut());
         }
-    }
-
-    unsafe {
-        ffi::avfilter_graph_config(*filter_graph as *mut _, std::ptr::null_mut());
 		ffi::avfilter_inout_free(&mut inputs  as *mut _);
 		ffi::avfilter_inout_free(&mut outputs  as *mut _);
     }
-
     return ret;
 }
