@@ -324,9 +324,11 @@ pub fn play_movie(movie_state: MovieState) {
         unsafe { ffi::av_frame_alloc().as_mut() }
         .expect("failed to allocated memory for AVFrame");
 
+    // we are going to rotate before scale, so input w/h needs to be flipped depending
+    // on rotation flags
     let sws_ctx = unsafe { sws_getContext(
-        codec_context.width,
-        codec_context.height,
+        match rotation { 90 => codec_context.height, _ => codec_context.width},
+        match rotation { 90 => codec_context.width, _ => codec_context.height},
         AVPixelFormat_AV_PIX_FMT_YUV420P,
         window_width as i32,
         window_height as i32,
