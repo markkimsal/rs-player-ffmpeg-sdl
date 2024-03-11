@@ -1,4 +1,4 @@
-#![allow(unused_imports)]
+#![allow(unused_imports, unused_variables, unused_mut, dead_code)]
 use std::borrow::Borrow;
 use std::ffi::CStr;
 use std::ffi::CString;
@@ -6,6 +6,7 @@ use std::ops::Deref;
 use std::panic::panic_any;
 use std::ptr;
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::slice;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -41,6 +42,7 @@ use sdl2::video::Window;
 
 use crate::filter::RotateFilter;
 use crate::movie_state;
+use crate::movie_state::CodecContextWrapper;
 use crate::movie_state::MovieState;
 
 // #[path="filter.rs"]
@@ -79,11 +81,12 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
     // video_state.format_context = FormatContextWraper{ptr: format_ctx.as_mut().unwrap()};
     video_state.set_format_context(format_ctx.as_mut().unwrap());
 
-    ffi::av_dump_format(video_state.format_context.ptr, 0, filepath.as_ptr(), 0);
+    ffi::av_dump_format(video_state.format_context.lock().unwrap().ptr, 0, filepath.as_ptr(), 0);
 
     // let format_context = unsafe { format_ctx.as_mut() }.unwrap();
     let streams = {
-        std::slice::from_raw_parts(video_state.format_context.as_ref().unwrap().streams, video_state.format_context.as_ref().unwrap().nb_streams as usize)
+        let format_ctx = video_state.format_context.lock().unwrap();
+        std::slice::from_raw_parts(format_ctx.as_ref().unwrap().streams, format_ctx.as_ref().unwrap().nb_streams as usize)
     };
     let mut codec_ptr: *const ffi::AVCodec = ptr::null_mut();
     let mut codec_parameters_ptr: *const ffi::AVCodecParameters = ptr::null_mut();
@@ -113,8 +116,9 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
                     video_stream_index = Some(i);
                     video_state.video_stream_idx = i as i64;
                     video_state.video_stream_idx = i as i64;
-                    video_state.video_ctx = ffi::avcodec_alloc_context3(local_codec); //.as_mut().unwrap();
-
+                    video_state.video_ctx = std::sync::Arc::new(Mutex::new(
+                        CodecContextWrapper{ptr: ffi::avcodec_alloc_context3(local_codec)}
+                    )); //.as_mut().unwrap();
                     codec_ptr = local_codec;
                     codec_parameters_ptr = local_codec_params;
                     time_base_den = stream.time_base.den;
@@ -141,15 +145,15 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
     }
 //    let codec_context = unsafe { ffi::avcodec_alloc_context3(codec_ptr).as_mut() }.unwrap();
 
-    if unsafe { ffi::avcodec_parameters_to_context(video_state.video_ctx, codec_parameters_ptr) } < 0 {
+    if unsafe { ffi::avcodec_parameters_to_context((video_state.video_ctx.lock().unwrap()).ptr, codec_parameters_ptr) } < 0 {
         panic!("failed to copy codec params to codec context");
     }
-    if ffi::avcodec_open2(video_state.video_ctx, codec_ptr, ptr::null_mut()) < 0 {
+    if ffi::avcodec_open2((video_state.video_ctx.lock().unwrap()).ptr, codec_ptr, ptr::null_mut()) < 0 {
         panic!("failed to open codec through avcodec_open2");
     }
 
-
-    let mut dur_s = video_state.format_context.as_ref().unwrap().duration / 10000;
+    // let format_ctx = video_state.format_context.lock().unwrap();
+    let mut dur_s = format_ctx.as_ref().unwrap().duration / 10000;
     let dur_min = dur_s  / 6000; // (60 * time_base_den as i64);
     // let dur_min = dur_s  /  (60 / time_base_den as i64);
     dur_s -= dur_min * 6000; // (60 * time_base_den as i64);
@@ -267,10 +271,10 @@ unsafe impl Send for Storage<'_>{}
 // pub fn open_window(ormat_context: *mut ffi::AVFormatContext, codec_context: &mut ffi::AVCodecContext) {
 pub fn play_movie(movie_state: MovieState) {
 
-    let format_context = &movie_state.format_context;
+    let format_context = std::sync::Arc::clone(&movie_state.format_context);
     // let codec_context = unsafe {movie_state.video_ctx.as_mut().unwrap()};
-    let codec_context = unsafe {movie_state.video_ctx.as_ref().unwrap()};
-    let rotation = unsafe { get_orientation_metadata_value((*format_context).ptr) };
+    let codec_context = unsafe {movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap()};
+    let rotation = unsafe { get_orientation_metadata_value((*format_context).lock().unwrap().ptr) };
     let mut rotate_filter = rotation_filter_init();
     crate::filter::init_filter(
         rotation,
@@ -312,11 +316,10 @@ pub fn play_movie(movie_state: MovieState) {
         window_width,
         window_height
     ).unwrap();
-    let frame =
-        unsafe { ffi::av_frame_alloc().as_mut() }
-        .expect("failed to allocated memory for AVFrame");
-    let packet = unsafe { ffi::av_packet_alloc().as_mut() }
-        .expect("failed to allocated memory for AVPacket");
+    // let frame = unsafe { ffi::av_frame_alloc().as_mut() }
+    //     .expect("failed to allocated memory for AVFrame");
+    // let packet = unsafe { ffi::av_packet_alloc().as_mut() }
+    //     .expect("failed to allocated memory for AVPacket");
     let dest_frame =
         unsafe { ffi::av_frame_alloc().as_mut() }
         .expect("failed to allocated memory for AVFrame");
@@ -334,27 +337,72 @@ pub fn play_movie(movie_state: MovieState) {
         ptr::null_mut(),
     ) };
 
+    let frame = unsafe {ffi::av_frame_alloc().as_mut()}
+        .expect("failed to allocated memory for AVFrame");
     let (tx, rx) = std::sync::mpsc::channel::<String>();
-    let format_context = std::sync::Arc::new(Mutex::new(movie_state.format_context));
-    let arc_format_context = std::sync::Arc::clone(&format_context);
-    // let m_format_ctx = Mutex::new(Storage{ptr: movie_state});
-    std::thread::spawn(move|| {
-        let _ = &arc_format_context;
-        for i in 1..10 {
-            println!("hi number {} from the spawned thread!", i);
-            let locked_fmt_ctx = std::sync::Arc::clone(&arc_format_context);
-            let unlocked_fmt_ctx = locked_fmt_ctx.lock().unwrap();
-            // let unlocked_movie_state: &Mutex<MovieState> = locked_movie_state.borrow();
-            unsafe {tx.send(format!("🔄🔄🔄🔄 nb_streams ptr is {:?}", (*unlocked_fmt_ctx).as_ref().unwrap().nb_streams)).unwrap();}
-            ::std::thread::sleep(Duration::from_millis(10));
-        }
-        // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 240000));
-    });
+    // let rc_movie_state = Rc::clone(&movie_state);
+    // let format_context = std::sync::Arc::new(Mutex::new(movie_state.format_context));
+    let arc_format_context = std::sync::Arc::clone(&movie_state.format_context);
+    // let video_ctx = std::sync::Arc::new(Mutex::new(movie_state.video_ctx));
+    let arc_video_ctx = std::sync::Arc::clone(&movie_state.video_ctx);
+    let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let keep_running2 = std::sync::Arc::clone(&keep_running);
+    let movie_state = std::sync::Arc::new(movie_state);
+    let arc_movie_state = std::sync::Arc::clone(&movie_state);
 
     std::thread::spawn(move|| {
         for msg in rx {
             println!("received message: {}", msg);
         }
+    });
+    std::thread::spawn(move|| {
+        // let _ = &arc_format_context;
+        // for i in 1..10 {
+        //     println!("hi number {} from the spawned thread!", i);
+        //     let locked_fmt_ctx = std::sync::Arc::clone(&arc_format_context);
+        //     let unlocked_fmt_ctx = locked_fmt_ctx.lock().unwrap();
+        //     unsafe {tx.send(format!("🔄🔄🔄🔄 nb_streams ptr is {:?}", (*unlocked_fmt_ctx).as_ref().unwrap().nb_streams)).unwrap();}
+        //     ::std::thread::sleep(Duration::from_millis(10));
+        // }
+        // // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 240000));
+        loop {
+        unsafe {
+            let packet = ffi::av_packet_alloc().as_mut()
+                .expect("failed to allocated memory for AVPacket");
+            let response = ffi::av_read_frame((*(arc_format_context.lock().unwrap())).ptr, packet);
+            // if response == ffi::AVERROR(ffi::EAGAIN) || response == ffi::AVERROR_EOF {
+            if response == ffi::AVERROR_EOF {
+                println!("{}", String::from(
+                    "EOF",
+                ));
+                // *keep_running2.get_mut() = false;
+                keep_running2.store(false, std::sync::atomic::Ordering::Relaxed);
+                return;
+                // break 'running;
+            }
+
+            if response < 0 {
+                println!("{}", String::from(
+                    "ERROR",
+                ));
+                // *keep_running2.get_mut() = false;
+                keep_running2.store(false, std::sync::atomic::Ordering::Relaxed);
+                return;
+                // break 'running;
+            }
+            {
+                if arc_movie_state.video_stream_idx == packet.stream_index as i64 {
+                    arc_movie_state.enqueue_packet(packet);
+                    ::std::thread::sleep(Duration::from_millis(4));
+                    // if let Ok(_) = decode_packet(packet, arc_video_ctx.lock().unwrap().as_mut().unwrap(), frame) {
+                    //     // blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
+                    // }
+                } else {
+                    ffi::av_packet_unref(packet);
+                }
+            }
+        }
+        };
     });
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut i = 0;
@@ -373,31 +421,23 @@ pub fn play_movie(movie_state: MovieState) {
         }
         // The rest of the game loop goes here...
 
-        unsafe {
-            let response = ffi::av_read_frame((*(format_context.lock().unwrap())).ptr, packet);
-            // if response == ffi::AVERROR(ffi::EAGAIN) || response == ffi::AVERROR_EOF {
-            if response == ffi::AVERROR_EOF {
-                println!("{}", String::from(
-                    "EOF",
-                ));
-                break 'running;
-            }
 
-            if response < 0 {
-                println!("{}", String::from(
-                    "ERROR",
-                ));
-                break 'running;
-            }
+        if keep_running.load(std::sync::atomic::Ordering::Relaxed) == false {
+            break 'running;
+        }
+
+        unsafe {
             {
-                if movie_state.video_stream_idx == packet.stream_index as i64 {
-                    if let Ok(_) = decode_packet(packet, movie_state.video_ctx.as_mut().unwrap(), frame) {
+                let mut locked_videoqueue = movie_state.videoqueue.lock().unwrap();
+                if let Some(packet) = locked_videoqueue.back_mut() {
+                    if let Ok(_) = decode_packet(packet.ptr, movie_state.video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
                         blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
                     }
+                    ffi::av_packet_free(&mut (packet.ptr));
+                    locked_videoqueue.pop_back();
                 }
-                ffi::av_packet_unref(packet);
             }
-        };
+        }
 
         canvas.present();
         // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 240000));
