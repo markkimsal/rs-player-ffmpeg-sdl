@@ -38,7 +38,8 @@ impl MovieState {
         self.format_context = Arc::new(Mutex::new(FormatContextWrapper{ptr:format_context}));
     }
     pub fn enqueue_packet(&self, packet: *mut ffi::AVPacket) {
-        self.videoqueue.lock().unwrap().push_back(PacketWrapper{ptr:packet});
+        let mut vq = self.videoqueue.lock().unwrap();
+        vq.push_back(PacketWrapper{ptr:packet});
     }
 }
 

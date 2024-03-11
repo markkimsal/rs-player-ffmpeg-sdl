@@ -441,12 +441,12 @@ pub fn play_movie(movie_state: MovieState) {
         unsafe {
             {
                 let mut locked_videoqueue = movie_state.videoqueue.lock().unwrap();
-                if let Some(packet) = locked_videoqueue.back_mut() {
+                if let Some(packet) = locked_videoqueue.front_mut() {
                     if let Ok(_) = decode_packet(packet.ptr, movie_state.video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
                         blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
                     }
                     ffi::av_packet_free(&mut (packet.ptr));
-                    locked_videoqueue.pop_back();
+                    locked_videoqueue.pop_front();
                 }
             }
         }
