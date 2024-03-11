@@ -346,6 +346,8 @@ pub fn play_movie(movie_state: MovieState) {
     // let video_ctx = std::sync::Arc::new(Mutex::new(movie_state.video_ctx));
     let arc_video_ctx = std::sync::Arc::clone(&movie_state.video_ctx);
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let pause_packets = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pause_packets2 = std::sync::Arc::clone(&pause_packets);
     let keep_running2 = std::sync::Arc::clone(&keep_running);
     let movie_state = std::sync::Arc::new(movie_state);
     let arc_movie_state = std::sync::Arc::clone(&movie_state);
@@ -355,7 +357,7 @@ pub fn play_movie(movie_state: MovieState) {
             println!("received message: {}", msg);
         }
     });
-    std::thread::spawn(move|| {
+    let packet_thread = std::thread::spawn(move|| {
         // let _ = &arc_format_context;
         // for i in 1..10 {
         //     println!("hi number {} from the spawned thread!", i);
@@ -401,6 +403,9 @@ pub fn play_movie(movie_state: MovieState) {
                     ffi::av_packet_unref(packet);
                 }
             }
+            if pause_packets2.load(std::sync::atomic::Ordering::Relaxed) {
+                ::std::thread::park();
+            }
         }
         };
     });
@@ -416,6 +421,11 @@ pub fn play_movie(movie_state: MovieState) {
                 Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
                     break 'running
                 },
+                Event::KeyDown { keycode: Some(Keycode::Space), .. } => {
+                    pause_packets.store(!pause_packets.load(std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
+                    packet_thread.thread().unpark();
+                },
+
                 _ => {}
             }
         }

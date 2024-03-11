@@ -39,9 +39,6 @@ impl MovieState {
     }
     pub fn enqueue_packet(&self, packet: *mut ffi::AVPacket) {
         self.videoqueue.lock().unwrap().push_back(PacketWrapper{ptr:packet});
-        // unsafe {
-        //     ffi::av_packet_unref(packet);
-        // }
     }
 }
 
