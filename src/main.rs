@@ -13,5 +13,5 @@ fn main() {
     }
     // let (_, format_context, codec_context) = open_input(args.get(1).unwrap_or(&default_file));
     // open_window(format_context, codec_context);
-    play_movie(&video_state);
+    play_movie(video_state);
 }

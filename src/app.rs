@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use std::borrow::Borrow;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::ops::Deref;
@@ -6,6 +7,7 @@ use std::panic::panic_any;
 use std::ptr;
 use std::ptr::NonNull;
 use std::slice;
+use std::sync::Mutex;
 use std::time::Duration;
 use rusty_ffmpeg::ffi;
 
@@ -74,9 +76,10 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
     if ffi::avformat_find_stream_info(format_ctx, ptr::null_mut()) < 0 {
         panic!("ERROR could not get the stream info");
     }
-    video_state.format_context = format_ctx.as_mut().unwrap();
+    // video_state.format_context = FormatContextWraper{ptr: format_ctx.as_mut().unwrap()};
+    video_state.set_format_context(format_ctx.as_mut().unwrap());
 
-    ffi::av_dump_format(video_state.format_context, 0, filepath.as_ptr(), 0);
+    ffi::av_dump_format(video_state.format_context.ptr, 0, filepath.as_ptr(), 0);
 
     // let format_context = unsafe { format_ctx.as_mut() }.unwrap();
     let streams = {
@@ -255,14 +258,19 @@ pub extern "C" fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFor
     );
     (codec_ptr, format_context, codec_context)
 }
+#[repr(C)]
+struct Storage<'m> {
+    // ptr: *mut ffi::AVFormatContext,
+    ptr: &'m MovieState
+}
+unsafe impl Send for Storage<'_>{}
+// pub fn open_window(ormat_context: *mut ffi::AVFormatContext, codec_context: &mut ffi::AVCodecContext) {
+pub fn play_movie(movie_state: MovieState) {
 
-// pub fn open_window(format_context: *mut ffi::AVFormatContext, codec_context: &mut ffi::AVCodecContext) {
-pub fn play_movie(movie_state: &MovieState) {
-
-    let format_context = movie_state.format_context;
+    let format_context = &movie_state.format_context;
     // let codec_context = unsafe {movie_state.video_ctx.as_mut().unwrap()};
     let codec_context = unsafe {movie_state.video_ctx.as_ref().unwrap()};
-    let rotation = unsafe { get_orientation_metadata_value(format_context) };
+    let rotation = unsafe { get_orientation_metadata_value((*format_context).ptr) };
     let mut rotate_filter = rotation_filter_init();
     crate::filter::init_filter(
         rotation,
@@ -326,7 +334,28 @@ pub fn play_movie(movie_state: &MovieState) {
         ptr::null_mut(),
     ) };
 
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let format_context = std::sync::Arc::new(Mutex::new(movie_state.format_context));
+    let arc_format_context = std::sync::Arc::clone(&format_context);
+    // let m_format_ctx = Mutex::new(Storage{ptr: movie_state});
+    std::thread::spawn(move|| {
+        let _ = &arc_format_context;
+        for i in 1..10 {
+            println!("hi number {} from the spawned thread!", i);
+            let locked_fmt_ctx = std::sync::Arc::clone(&arc_format_context);
+            let unlocked_fmt_ctx = locked_fmt_ctx.lock().unwrap();
+            // let unlocked_movie_state: &Mutex<MovieState> = locked_movie_state.borrow();
+            unsafe {tx.send(format!("🔄🔄🔄🔄 nb_streams ptr is {:?}", (*unlocked_fmt_ctx).as_ref().unwrap().nb_streams)).unwrap();}
+            ::std::thread::sleep(Duration::from_millis(10));
+        }
+        // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 240000));
+    });
 
+    std::thread::spawn(move|| {
+        for msg in rx {
+            println!("received message: {}", msg);
+        }
+    });
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut i = 0;
     'running: loop {
@@ -343,10 +372,9 @@ pub fn play_movie(movie_state: &MovieState) {
             }
         }
         // The rest of the game loop goes here...
-        let video_stream_index = Some(0);
 
         unsafe {
-            let response = ffi::av_read_frame(format_context, packet);
+            let response = ffi::av_read_frame((*(format_context.lock().unwrap())).ptr, packet);
             // if response == ffi::AVERROR(ffi::EAGAIN) || response == ffi::AVERROR_EOF {
             if response == ffi::AVERROR_EOF {
                 println!("{}", String::from(
@@ -362,7 +390,7 @@ pub fn play_movie(movie_state: &MovieState) {
                 break 'running;
             }
             {
-                if video_stream_index == Some(packet.stream_index as usize) {
+                if movie_state.video_stream_idx == packet.stream_index as i64 {
                     if let Ok(_) = decode_packet(packet, movie_state.video_ctx.as_mut().unwrap(), frame) {
                         blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
                     }
