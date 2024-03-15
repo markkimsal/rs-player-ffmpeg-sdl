@@ -4,10 +4,12 @@ use std::ffi::{CString, CStr};
 use rusty_ffmpeg::ffi::{self};
 
 
+/*
 enum pix_fmts {
     AVPixelFormat_AV_PIX_FMT_YUV420P,
     AVPixelFormat_AV_PIX_FMT_NONE
 }
+*/
 pub struct RotateFilter {
     pub filter_graph: *mut ffi::AVFilterGraph,
     pub buffersink_ctx: *mut ffi::AVFilterContext,

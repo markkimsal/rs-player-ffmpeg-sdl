@@ -37,9 +37,13 @@ impl MovieState {
     pub fn set_format_context(&mut self, format_context: *mut ffi::AVFormatContext) {
         self.format_context = Arc::new(Mutex::new(FormatContextWrapper{ptr:format_context}));
     }
-    pub fn enqueue_packet(&self, packet: *mut ffi::AVPacket) {
+    pub fn enqueue_packet(&self, packet: *mut ffi::AVPacket) -> Result<(), ()> {
         let mut vq = self.videoqueue.lock().unwrap();
+        if vq.len() >= 10 {
+            return Err(());
+        }
         vq.push_back(PacketWrapper{ptr:packet});
+        return Ok(());
     }
 }
 

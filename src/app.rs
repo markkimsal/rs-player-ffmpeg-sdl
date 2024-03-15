@@ -78,12 +78,10 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
     if ffi::avformat_find_stream_info(format_ctx, ptr::null_mut()) < 0 {
         panic!("ERROR could not get the stream info");
     }
-    // video_state.format_context = FormatContextWraper{ptr: format_ctx.as_mut().unwrap()};
     video_state.set_format_context(format_ctx.as_mut().unwrap());
 
     ffi::av_dump_format(video_state.format_context.lock().unwrap().ptr, 0, filepath.as_ptr(), 0);
 
-    // let format_context = unsafe { format_ctx.as_mut() }.unwrap();
     let streams = {
         let format_ctx = video_state.format_context.lock().unwrap();
         std::slice::from_raw_parts(format_ctx.as_ref().unwrap().streams, format_ctx.as_ref().unwrap().nb_streams as usize)
@@ -92,20 +90,20 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
     let mut codec_parameters_ptr: *const ffi::AVCodecParameters = ptr::null_mut();
     let mut video_stream_index = None;
     let mut time_base_den:i32 = 10000;
-    let mut _time_base_num:i32 = 10000;
+    let mut time_base_num:i32 = 10000;
 
     for s in streams
         .iter()
-        .map(|stream| unsafe { stream.as_ref() }.unwrap())
+        .map(|stream| *stream)
         .enumerate()
     {
-        let (i, &stream): (usize, &ffi::AVStream) = s;
+        let (i, stream): (usize, *mut ffi::AVStream) = s;
         println!(
             "AVStream->time_base before open codec {}/{}",
-            stream.time_base.num, stream.time_base.den
+            (*stream).time_base.num, (*stream).time_base.den
         );
 
-        let local_codec_params = stream.codecpar.as_ref()
+        let local_codec_params = (*stream).codecpar.as_ref()
             .expect("ERROR: unable to dereference codec parameters");
         let local_codec = ffi::avcodec_find_decoder(local_codec_params.codec_id).as_ref()
             .expect("ERROR unsupported codec!");
@@ -114,16 +112,20 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
             ffi::AVMediaType_AVMEDIA_TYPE_VIDEO => {
                 if video_stream_index.is_none() {
                     video_stream_index = Some(i);
-                    video_state.video_stream_idx = i as i64;
+                    video_state.video_stream.lock().unwrap().ptr = stream;
                     video_state.video_stream_idx = i as i64;
                     video_state.video_ctx = std::sync::Arc::new(Mutex::new(
                         CodecContextWrapper{ptr: ffi::avcodec_alloc_context3(local_codec)}
                     )); //.as_mut().unwrap();
                     codec_ptr = local_codec;
                     codec_parameters_ptr = local_codec_params;
-                    time_base_den = stream.time_base.den;
-                    _time_base_num = stream.time_base.num;
+                    time_base_den = (*stream).time_base.den;
+                    time_base_num = (*stream).time_base.num;
                 }
+    println!(
+        " 🚩 format time_base {}/{}",
+        time_base_num, time_base_den
+    );
 
                 println!(
                     "Video Codec: resolution {} x {}",
@@ -162,10 +164,9 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
         .to_str()
         .unwrap();
     println!(
-        "format {}, duration {:0>3}:{:0>2}, time_base {}",
-        format_name, dur_min, dur_s / 100 , time_base_den
+        "format {}, duration {:0>3}:{:0>2}, time_base {}/{}",
+        format_name, dur_min, dur_s / 100 , time_base_num, time_base_den
     );
-
 }
 
 #[allow(improper_ctypes_definitions)]
@@ -198,7 +199,7 @@ pub extern "C" fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFor
     let mut codec_parameters_ptr: *const ffi::AVCodecParameters = ptr::null_mut();
     let mut video_stream_index = None;
     let mut time_base_den:i32 = 10000;
-    let mut _time_base_num:i32 = 10000;
+    let mut time_base_num:i32 = 10000;
 
     for s in streams
         .iter()
@@ -223,7 +224,7 @@ pub extern "C" fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFor
                     codec_ptr = local_codec;
                     codec_parameters_ptr = local_codec_params;
                     time_base_den = stream.time_base.den;
-                    _time_base_num = stream.time_base.num;
+                    time_base_num = stream.time_base.num;
                 }
 
                 println!(
@@ -257,8 +258,8 @@ pub extern "C" fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFor
     let dur_min = dur_s  / 6000; // (60 * time_base_den as i64);
     dur_s -= dur_min * 6000; // (60 * time_base_den as i64);
     println!(
-        "format {}, duration {:0>3}:{:0>2}, time_base {}",
-        format_name, dur_min, dur_s / 100 , time_base_den
+        "format {}, duration {:0>3}:{:0>2}, time_base {} /{}",
+        format_name, dur_min, dur_s / 100 , time_base_num, time_base_den
     );
     (codec_ptr, format_context, codec_context)
 }
@@ -350,6 +351,7 @@ pub fn play_movie(movie_state: MovieState) {
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let pause_packets = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let pause_packets2 = std::sync::Arc::clone(&pause_packets);
+    let pause_packets3 = std::sync::Arc::clone(&pause_packets);
     let keep_running2 = std::sync::Arc::clone(&keep_running);
     let movie_state = std::sync::Arc::new(movie_state);
     let arc_movie_state = std::sync::Arc::clone(&movie_state);
@@ -360,15 +362,6 @@ pub fn play_movie(movie_state: MovieState) {
         }
     });
     let packet_thread = std::thread::spawn(move|| {
-        // let _ = &arc_format_context;
-        // for i in 1..10 {
-        //     println!("hi number {} from the spawned thread!", i);
-        //     let locked_fmt_ctx = std::sync::Arc::clone(&arc_format_context);
-        //     let unlocked_fmt_ctx = locked_fmt_ctx.lock().unwrap();
-        //     unsafe {tx.send(format!("🔄🔄🔄🔄 nb_streams ptr is {:?}", (*unlocked_fmt_ctx).as_ref().unwrap().nb_streams)).unwrap();}
-        //     ::std::thread::sleep(Duration::from_millis(10));
-        // }
-        // // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 240000));
         loop {
         unsafe {
             let packet = ffi::av_packet_alloc().as_mut()
@@ -396,8 +389,10 @@ pub fn play_movie(movie_state: MovieState) {
             }
             {
                 if arc_movie_state.video_stream_idx == packet.stream_index as i64 {
-                    arc_movie_state.enqueue_packet(packet);
-                    ::std::thread::sleep(Duration::from_millis(4));
+                    while let Err(_) = arc_movie_state.enqueue_packet(packet) {
+                        ::std::thread::sleep(Duration::from_millis(4));
+                    }
+                        // ::std::thread::sleep(Duration::from_millis(33));
                     // if let Ok(_) = decode_packet(packet, arc_video_ctx.lock().unwrap().as_mut().unwrap(), frame) {
                     //     // blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
                     // }
@@ -413,6 +408,8 @@ pub fn play_movie(movie_state: MovieState) {
     });
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut i = 0;
+    let mut last_pts = 0;
+    let mut last_clock = 0;
     'running: loop {
         i = (i + 1) % 255;
         // canvas.set_draw_color(Color::RGB(i, 64, 255 - i));
@@ -433,26 +430,42 @@ pub fn play_movie(movie_state: MovieState) {
         }
         // The rest of the game loop goes here...
 
+        if pause_packets3.load(std::sync::atomic::Ordering::Relaxed) {
+            continue;
+        }
 
         if keep_running.load(std::sync::atomic::Ordering::Relaxed) == false {
             break 'running;
         }
 
         unsafe {
-            {
-                let mut locked_videoqueue = movie_state.videoqueue.lock().unwrap();
-                if let Some(packet) = locked_videoqueue.front_mut() {
-                    if let Ok(_) = decode_packet(packet.ptr, movie_state.video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
-                        blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
+            let mut locked_videoqueue = movie_state.videoqueue.lock().unwrap();
+            if let Some(packet) = locked_videoqueue.front_mut() {
+                // !Note that AVPacket.pts is in AVStream.time_base units, not AVCodecContext.time_base units.
+                let mut delay:f64 = packet.ptr.as_ref().unwrap().pts as f64 - last_pts as f64;
+                last_pts = packet.ptr.as_ref().unwrap().pts;
+                if let Ok(_) = decode_packet(packet.ptr, movie_state.video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
+
+                    {
+                        let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
+                        delay *= (time_base.num as f64) / (time_base.den as f64);
                     }
-                    ffi::av_packet_free(&mut (packet.ptr));
-                    locked_videoqueue.pop_front();
+                    blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
                 }
+                ffi::av_packet_free(&mut (packet.ptr));
+                locked_videoqueue.pop_front();
+
+                // println!("av_gettime_relative: {}", (ffi::av_gettime_relative() - last_clock ) );
+                delay -= (ffi::av_gettime_relative() - last_clock ) as f64 / 1_000_000.0;
+                if delay > 0.0 {
+                    // println!("delay: {}", (delay));
+                    ::std::thread::sleep(Duration::from_secs_f64(delay));
+                }
+                last_clock = ffi::av_gettime_relative();
             }
         }
 
         canvas.present();
-        // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 240000));
     }
     unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
 }
@@ -485,7 +498,8 @@ fn decode_packet(
             codec_context.frame_number,
             unsafe { ffi::av_get_picture_type_char(frame.pict_type) },
             frame.pkt_size,
-            frame.pts * codec_context.time_base.num as i64 / codec_context.time_base.den as i64,
+            // frame.pts * codec_context.time_base.num as i64 / codec_context.time_base.den as i64,
+            unsafe {ffi::av_rescale_q(frame.pts, codec_context.time_base, ffi::AVRational { num: 1, den: 1 })},
             frame.key_frame,
             frame.pkt_dts
         );
