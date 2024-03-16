@@ -9,10 +9,8 @@ fn main() {
     let default_file = String::from("foo.mp4");
     let mut video_state = MovieState::new();
     unsafe {
-        let filepath: std::ffi::CString = std::ffi::CString::new(default_file).unwrap();
-        let filepath: *const std::os::raw::c_char = filepath.as_ptr();
-        // open_movie(args.get(1).unwrap_or(&default_file.as_ptr()), &mut video_state);
-        open_movie(filepath, &mut video_state);
+        let filepath: std::ffi::CString = std::ffi::CString::new(args.get(1).unwrap_or(&default_file).as_str()).unwrap();
+        open_movie(filepath.as_ptr(), &mut video_state);
     }
     // let (_, format_context, codec_context) = open_input(args.get(1).unwrap_or(&default_file));
     // open_window(format_context, codec_context);
