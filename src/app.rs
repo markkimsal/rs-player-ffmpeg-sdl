@@ -68,16 +68,20 @@ pub unsafe extern "C" fn new_movie_state() -> *mut MovieState {
 pub unsafe extern "C" fn drop_movie_state(movie_state: *mut MovieState) {
     // claim lock to drain other threads
     {
-        let format_ctx = movie_state.as_ref().unwrap().format_context.lock().unwrap();
-        ffi::av_free(format_ctx.ptr as *mut _);
-        drop(format_ctx);
         let video_ctx = movie_state.as_ref().unwrap().video_ctx.lock().unwrap();
         ffi::av_free(video_ctx.ptr as *mut _);
         drop(video_ctx);
-        movie_state.as_mut().unwrap().clear_packet_queue().unwrap();
-        let mut vq = movie_state.as_ref().unwrap().videoqueue.lock().unwrap();
-        vq.clear();
     }
+    {
+        movie_state.as_mut().unwrap().clear_packet_queue().unwrap();
+    }
+    {
+        let mut format_ctx = movie_state.as_ref().unwrap().format_context.lock().unwrap();
+        ffi::avformat_close_input(&mut format_ctx.ptr);
+        // ffi::av_free(format_ctx.ptr as *mut _);
+        // drop(format_ctx);
+    }
+
     // make sure its empty after giving up the lock
     assert!(movie_state.as_ref().unwrap().videoqueue.lock().unwrap().is_empty());
     // ! this leads to numap_chunk sigabrt
@@ -423,12 +427,11 @@ unsafe impl Send for Storage<'_>{}
             {
                 if arc_movie_state.video_stream_idx == packet.stream_index as i64 {
                     while let Err(_) = arc_movie_state.enqueue_packet(packet) {
-                        ::std::thread::sleep(Duration::from_millis(4));
+                        // ::std::thread::sleep(Duration::from_millis(4));
                         ::std::thread::yield_now();
                         if !keep_running2.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
                         }
-
                     }
                     // ::std::thread::sleep(Duration::from_millis(33));
                 } else {
