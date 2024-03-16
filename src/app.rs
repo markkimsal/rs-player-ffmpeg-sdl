@@ -28,6 +28,7 @@ use rusty_ffmpeg::ffi::av_frame_free;
 use rusty_ffmpeg::ffi::av_freep;
 use rusty_ffmpeg::ffi::sws_getCachedContext;
 use rusty_ffmpeg::ffi::sws_getContext;
+use rusty_ffmpeg::ffi::sws_freeContext;
 use rusty_ffmpeg::ffi::sws_scale;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
@@ -66,28 +67,8 @@ pub unsafe extern "C" fn new_movie_state() -> *mut MovieState {
 }
 #[no_mangle]
 pub unsafe extern "C" fn drop_movie_state(movie_state: *mut MovieState) {
-    // claim lock to drain other threads
-    {
-        let video_ctx = movie_state.as_ref().unwrap().video_ctx.lock().unwrap();
-        ffi::av_free(video_ctx.ptr as *mut _);
-        drop(video_ctx);
-    }
-    {
-        movie_state.as_mut().unwrap().clear_packet_queue().unwrap();
-    }
-    {
-        let mut format_ctx = movie_state.as_ref().unwrap().format_context.lock().unwrap();
-        ffi::avformat_close_input(&mut format_ctx.ptr);
-        // ffi::av_free(format_ctx.ptr as *mut _);
-        // drop(format_ctx);
-    }
-
-    // make sure its empty after giving up the lock
-    assert!(movie_state.as_ref().unwrap().videoqueue.lock().unwrap().is_empty());
-    // ! this leads to numap_chunk sigabrt
-    // drop(Box::<MovieState>::from_raw(movie_state));
+    drop(Box::<MovieState>::from_raw(movie_state));
 }
-
 
 #[no_mangle]
 pub unsafe extern "C" fn a_function_from_rust() -> i32 {
@@ -507,6 +488,8 @@ unsafe impl Send for Storage<'_>{}
         canvas.present();
     }
     unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
+    unsafe { sws_freeContext(sws_ctx as *mut _) };
+
     packet_thread.join().unwrap();
 }
 

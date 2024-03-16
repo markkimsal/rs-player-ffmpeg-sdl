@@ -15,7 +15,27 @@ pub struct MovieState {
     pub video_stream: Arc<Mutex<StreamWrapper>>,
     pub video_ctx: Arc<Mutex<CodecContextWrapper>>,
 }
+impl Drop for MovieState {
+    fn drop(&mut self) {
+        // claim lock to drain other threads
+        {
+            let video_ctx = self.video_ctx.lock().unwrap();
+            unsafe {ffi::av_free(video_ctx.ptr as *mut _);}
+            drop(video_ctx);
+        }
+        {
+            self.clear_packet_queue().unwrap();
+        }
+        {
+            let mut format_ctx = self.format_context.lock().unwrap();
+            unsafe {ffi::avformat_close_input(&mut format_ctx.ptr);}
+        }
 
+        // make sure its empty after giving up the lock
+        assert!(self.videoqueue.lock().unwrap().is_empty());
+        println!("dropping movie state");
+    }
+}
 impl MovieState {
     pub fn new () -> MovieState {
         MovieState {
