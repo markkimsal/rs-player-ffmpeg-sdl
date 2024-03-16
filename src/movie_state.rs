@@ -45,6 +45,17 @@ impl MovieState {
         vq.push_back(PacketWrapper{ptr:packet});
         return Ok(());
     }
+
+    pub fn clear_packet_queue(&mut self) -> Result<(), ()> {
+        let mut vq = self.videoqueue.lock().unwrap();
+
+        vq.iter_mut().for_each(|p| unsafe {
+            ffi::av_packet_free(&mut p.ptr);
+        });
+        vq.clear();
+        return Ok(());
+    }
+
 }
 
 pub struct FormatContextWrapper {

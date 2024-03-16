@@ -1,5 +1,5 @@
 use rsplayer::movie_state::MovieState;
-use rsplayer::app::{open_movie, play_movie};
+use rsplayer::app::{open_movie, play_movie, drop_movie_state};
 
 mod movie_state;
 
@@ -17,4 +17,5 @@ fn main() {
     // let (_, format_context, codec_context) = open_input(args.get(1).unwrap_or(&default_file));
     // open_window(format_context, codec_context);
     unsafe {play_movie(&mut video_state); }
+    unsafe {drop_movie_state(&mut video_state); }
 }
