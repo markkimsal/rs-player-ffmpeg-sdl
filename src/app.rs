@@ -428,7 +428,7 @@ unsafe impl Send for Storage<'_>{}
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut i = 0;
     let mut last_pts = 0;
-    let mut last_clock = 0;
+    let mut last_clock = ffi::av_gettime_relative();
     'running: loop {
         i = (i + 1) % 255;
         // canvas.set_draw_color(Color::RGB(i, 64, 255 - i));
@@ -477,8 +477,8 @@ unsafe impl Send for Storage<'_>{}
 
                 // println!("av_gettime_relative: {}", (ffi::av_gettime_relative() - last_clock ) );
                 delay -= (ffi::av_gettime_relative() - last_clock ) as f64 / 1_000_000.0;
-                if delay > 0.0 {
-                    // println!("delay: {}", (delay));
+                // TODO: less than 2 * FPS
+                if delay > 0.0 && delay < 1.0 {
                     ::std::thread::sleep(Duration::from_secs_f64(delay));
                 }
                 last_clock = ffi::av_gettime_relative();
