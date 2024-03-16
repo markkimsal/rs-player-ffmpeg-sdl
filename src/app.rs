@@ -58,19 +58,26 @@ fn rotation_filter_init() -> crate::filter::RotateFilter {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn new_movie_state() -> *mut MovieState {
+    // Box::new(MovieState::new()).as_mut() as *mut MovieState
+    // &mut MovieState::new() as *mut MovieState
+    Box::into_raw(Box::new(MovieState::new())) as *mut MovieState
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn a_function_from_rust() -> i32 {
     42
 }
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
-pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
-    let filepath: CString = CString::new(src).unwrap();
+pub unsafe extern "C" fn open_movie(filepath: *const libc::c_char, video_state: &mut MovieState) {
+    // let filepath: CString = CString::new(src).unwrap();
     let mut format_ctx = ffi::avformat_alloc_context();
 
     let format     = ptr::null_mut();
     let dict       = ptr::null_mut();
     if {
-        ffi::avformat_open_input(&mut format_ctx, filepath.as_ptr(), format, dict)
+        ffi::avformat_open_input(&mut format_ctx, filepath, format, dict)
     } != 0 {
         panic!("🚩 cannot open file")
     }
@@ -80,7 +87,7 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
     }
     video_state.set_format_context(format_ctx.as_mut().unwrap());
 
-    ffi::av_dump_format(video_state.format_context.lock().unwrap().ptr, 0, filepath.as_ptr(), 0);
+    ffi::av_dump_format(video_state.format_context.lock().unwrap().ptr, 0, filepath, 0);
 
     let streams = {
         let format_ctx = video_state.format_context.lock().unwrap();
@@ -110,7 +117,9 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
 
         match local_codec_params.codec_type {
             ffi::AVMediaType_AVMEDIA_TYPE_VIDEO => {
+
                 if video_stream_index.is_none() {
+
                     video_stream_index = Some(i);
                     video_state.video_stream.lock().unwrap().ptr = stream;
                     video_state.video_stream_idx = i as i64;
@@ -122,10 +131,6 @@ pub unsafe extern "C" fn open_movie(src: &str, video_state: &mut MovieState) {
                     time_base_den = (*stream).time_base.den;
                     time_base_num = (*stream).time_base.num;
                 }
-    println!(
-        " 🚩 format time_base {}/{}",
-        time_base_num, time_base_den
-    );
 
                 println!(
                     "Video Codec: resolution {} x {}",
@@ -269,9 +274,12 @@ struct Storage<'m> {
     ptr: &'m MovieState
 }
 unsafe impl Send for Storage<'_>{}
-// pub fn open_window(ormat_context: *mut ffi::AVFormatContext, codec_context: &mut ffi::AVCodecContext) {
-pub fn play_movie(movie_state: MovieState) {
 
+#[no_mangle]
+#[allow(improper_ctypes_definitions)]
+ pub unsafe extern "C" fn play_movie(movie_state: *const MovieState) {
+
+    let movie_state = movie_state.as_ref().unwrap();
     let format_context = std::sync::Arc::clone(&movie_state.format_context);
     // let codec_context = unsafe {movie_state.video_ctx.as_mut().unwrap()};
     let codec_context = unsafe {movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap()};

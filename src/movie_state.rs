@@ -2,7 +2,7 @@
 use std::{ops::Deref, sync::{Arc, Mutex}, collections::VecDeque};
 
 use rusty_ffmpeg::ffi::{self};
-
+#[repr(C)]
 pub struct MovieState {
     pub format_context: Arc<Mutex<FormatContextWrapper>>,
     pub video_stream_idx: i64,
