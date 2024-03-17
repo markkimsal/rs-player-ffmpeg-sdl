@@ -14,6 +14,7 @@ pub struct MovieState {
     pub videoqueue: Arc<Mutex<VecDeque<PacketWrapper>>>,
     pub video_stream: Arc<Mutex<StreamWrapper>>,
     pub video_ctx: Arc<Mutex<CodecContextWrapper>>,
+    pub picq: Arc<Mutex<VecDeque<FrameWrapper>>>,
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
@@ -49,6 +50,7 @@ impl MovieState {
             // audio_pkt: std::ptr::null_mut(),
             video_stream: Arc::new(Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()})),
             video_ctx: Arc::new(Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()})),
+            picq: Arc::new(Mutex::new(VecDeque::with_capacity(3))),
         }
     }
 }
@@ -74,6 +76,32 @@ impl MovieState {
         });
         vq.clear();
         return Ok(());
+    }
+
+    pub fn enqueue_frame(&self, frame: *mut ffi::AVFrame) -> Result<(), ()> {
+        let mut pq = self.picq.lock().unwrap();
+        if pq.len() >= 4 {
+            // eprintln!("dropping frame");
+            return Err(());
+        }
+        pq.push_back(FrameWrapper{ptr:frame});
+        return Ok(());
+    }
+
+    pub fn dequeue_frame(&self) -> Option<FrameWrapper> {
+        let mut pq = self.picq.lock().unwrap();
+        if pq.len() <= 0 {
+            return None
+        }
+        return pq.pop_front();
+    }
+    pub fn peek_frame_pts(&self) -> Option<i64> {
+        let pq = self.picq.lock().unwrap();
+        if pq.len() <= 0 {
+            return None
+        }
+        let front = pq.front().unwrap();
+        unsafe {Some(front.ptr.as_ref().unwrap().pts)}
     }
 
 }
@@ -115,6 +143,16 @@ pub struct PacketWrapper {
 unsafe impl Send for PacketWrapper{}
 impl Deref for PacketWrapper {
     type Target = *mut ffi::AVPacket;
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
+    }
+}
+pub struct FrameWrapper {
+    pub ptr: *mut ffi::AVFrame,
+}
+unsafe impl Send for FrameWrapper{}
+impl Deref for FrameWrapper {
+    type Target = *mut ffi::AVFrame;
     fn deref(&self) -> &Self::Target {
         &self.ptr
     }

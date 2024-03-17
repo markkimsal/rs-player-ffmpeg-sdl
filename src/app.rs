@@ -15,6 +15,7 @@ use std::time::Duration;
 use rusty_ffmpeg::ffi;
 
 use libc::{size_t, c_int};
+use rusty_ffmpeg::ffi::AVERROR;
 use rusty_ffmpeg::ffi::AVFrame;
 use rusty_ffmpeg::ffi::AVPictureType_AV_PICTURE_TYPE_P;
 use rusty_ffmpeg::ffi::AVPixelFormat_AV_PIX_FMT_ARGB;
@@ -42,12 +43,16 @@ use sdl2::sys::SDL_Texture;
 use sdl2::sys::SDL_TextureAccess;
 use sdl2::sys::SDL_UpdateTexture;
 use sdl2::sys::SDL_UpdateYUVTexture;
+use sdl2::video;
 use sdl2::video::Window;
 
 use crate::filter::RotateFilter;
 use crate::movie_state;
 use crate::movie_state::CodecContextWrapper;
 use crate::movie_state::MovieState;
+
+#[cfg_attr(target_os="linux", path="platform/sdl.rs")]
+mod platform;
 
 // #[path="filter.rs"]
 // mod filter;
@@ -309,28 +314,6 @@ unsafe impl Send for Storage<'_>{}
         -90 => (450, 800),
         _  => (800, 450)
     };
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
-
-    let window = video_subsystem.window("rs-player-ffmpeg-sdl2", window_width, window_height)
-        .position_centered()
-        .build()
-        .unwrap();
-
-    let mut canvas = window.into_canvas().build().unwrap();
-
-    canvas.set_draw_color(Color::RGB(0, 255, 255));
-    canvas.clear();
-    canvas.present();
-    let texture_creator = canvas.texture_creator();
-    let mut texture = texture_creator.create_texture(
-        Some(PixelFormatEnum::ARGB32),
-        TextureAccess::Streaming,
-        // 800,450
-        // 450,800
-        window_width,
-        window_height
-    ).unwrap();
     // let frame = unsafe { ffi::av_frame_alloc().as_mut() }
     //     .expect("failed to allocated memory for AVFrame");
     // let packet = unsafe { ffi::av_packet_alloc().as_mut() }
@@ -422,74 +405,69 @@ unsafe impl Send for Storage<'_>{}
             if pause_packets2.load(std::sync::atomic::Ordering::Relaxed) {
                 ::std::thread::park();
             }
-       }
+            ::std::thread::yield_now();
+        }
         };
     });
-    let mut event_pump = sdl_context.event_pump().unwrap();
+
     let mut i = 0;
     let mut last_pts = 0;
     let mut last_clock = ffi::av_gettime_relative();
-    'running: loop {
-        i = (i + 1) % 255;
-        // canvas.set_draw_color(Color::RGB(i, 64, 255 - i));
-        // canvas.clear();
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit {..} |
-                Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                    keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
-                    break 'running
-                },
-                Event::KeyDown { keycode: Some(Keycode::Space), .. } => {
-                    pause_packets.store(!pause_packets.load(std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
-                    packet_thread.thread().unpark();
-                },
-
-                _ => {}
-            }
-        }
-        // The rest of the game loop goes here...
-
-        if pause_packets3.load(std::sync::atomic::Ordering::Relaxed) {
-            continue;
-        }
-
-        if keep_running.load(std::sync::atomic::Ordering::Relaxed) == false {
-            break 'running;
-        }
-
+    // let videoqueue =  movie_state.videoqueue.clone();
+    // let video_ctx =  movie_state.video_ctx.clone();
+    // let picq =  movie_state.picq.clone();
+    let arc_movie_state = std::sync::Arc::clone(&movie_state);
+    let decode_thread = std::thread::spawn(move || {
+        loop {
         unsafe {
-            let mut locked_videoqueue = movie_state.videoqueue.lock().unwrap();
+
+            let mut frame = ffi::av_frame_alloc().as_mut()
+                .expect("failed to allocated memory for AVFrame");
+            let mut locked_videoqueue = arc_movie_state.videoqueue.lock().unwrap();
             if let Some(packet) = locked_videoqueue.front_mut() {
                 // !Note that AVPacket.pts is in AVStream.time_base units, not AVCodecContext.time_base units.
-                let mut delay:f64 = packet.ptr.as_ref().unwrap().pts as f64 - last_pts as f64;
-                last_pts = packet.ptr.as_ref().unwrap().pts;
-                if let Ok(_) = decode_packet(packet.ptr, movie_state.video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
-
+                // let mut delay:f64 = packet.ptr.as_ref().unwrap().pts as f64 - last_pts as f64;
+                // last_pts = packet.ptr.as_ref().unwrap().pts;
+                if let Ok(_) = decode_packet(packet.ptr, arc_movie_state.video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
                     {
-                        let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
-                        delay *= (time_base.num as f64) / (time_base.den as f64);
+                        // let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
+                        // delay *= (time_base.num as f64) / (time_base.den as f64);
                     }
-                    blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
-                }
-                ffi::av_packet_free(&mut (packet.ptr));
-                locked_videoqueue.pop_front();
 
-                // println!("av_gettime_relative: {}", (ffi::av_gettime_relative() - last_clock ) );
-                delay -= (ffi::av_gettime_relative() - last_clock ) as f64 / 1_000_000.0;
-                // TODO: less than 2 * FPS
-                if delay > 0.0 && delay < 1.0 {
-                    ::std::thread::sleep(Duration::from_secs_f64(delay));
+                    while let Err(_) = arc_movie_state.enqueue_frame(frame) {
+                        ::std::thread::yield_now();
+                        ::std::thread::sleep(Duration::from_millis(4));
+                        if ! keep_running3.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                    }
+
+                } else {
+                    ffi::av_freep(frame as *mut _ as *mut _);
                 }
-                last_clock = ffi::av_gettime_relative();
+                ffi::av_packet_unref(packet.ptr);
+                locked_videoqueue.pop_front();
+            }
+            ::std::thread::yield_now();
+            if ! keep_running3.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            if pause_packets3.load(std::sync::atomic::Ordering::Relaxed) {
+                ::std::thread::park();
             }
         }
+        };
+    });
 
-        canvas.present();
-    }
+
+    let mut subsystem = platform::init_subsystem(window_width, window_height).unwrap();
+    platform::event_loop(&movie_state, &mut subsystem);
+
     unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
     unsafe { sws_freeContext(sws_ctx as *mut _) };
 
+    keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+    decode_thread.join().unwrap();
     packet_thread.join().unwrap();
 }
 
@@ -501,6 +479,7 @@ fn decode_packet(
     let mut response = unsafe { ffi::avcodec_send_packet(codec_context, packet) };
 
     if response < 0 {
+        eprintln!("Error while sending a packet to the decoder. {:?}", ffi::av_err2str(response));
         return Err(String::from("Error while sending a packet to the decoder."));
     }
     while response >= 0 {
