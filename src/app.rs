@@ -511,59 +511,6 @@ fn decode_packet(
 }
 
 
-fn blit_frame(
-    src_frame: &mut ffi::AVFrame,
-    dest_frame: &mut ffi::AVFrame,
-    canvas: &mut Canvas<Window>,
-    texture: &mut Texture,
-    sws_ctx: *mut SwsContext,
-    filter: &crate::filter::RotateFilter,
-) -> Result<(), String> {
-
-        let  new_frame = frame_thru_filter(filter, src_frame);
-
-        // dest_frame.width  = new_frame.width;
-        // dest_frame.height = new_frame.height;
-        dest_frame.width  = canvas.window().size().0 as i32;
-        dest_frame.height = canvas.window().size().1 as i32;
-        dest_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
-
-        unsafe {
-            ffi::av_frame_get_buffer(dest_frame, 0);
-             sws_scale(
-                sws_ctx,
-                new_frame.data.as_ptr() as _,
-                new_frame.linesize.as_ptr(),
-                0,
-                new_frame.height,
-                // codec_context.height,
-                dest_frame.data.as_mut_ptr(),
-                dest_frame.linesize.as_mut_ptr()
-            )
-        };
-
-    let new_frame = dest_frame;
-    // unsafe { SDL_UpdateTexture(
-    //     texture.raw(), ptr::null(),
-    //     (*dest_frame).data[0] as _, (*dest_frame).linesize[0] as _
-    // ) };
-    unsafe { SDL_UpdateTexture(
-        texture.raw(), ptr::null(),
-        (new_frame).data[0] as _, (new_frame).linesize[0] as _
-    ) };
-
-    // SDL cannot handle YUV(J)420P
-    // unsafe { SDL_UpdateYUVTexture(
-    //     texture.raw(), ptr::null(),
-    //     dest_frame.data[0], dest_frame.linesize[0],
-    //     dest_frame.data[1], dest_frame.linesize[1],
-    //     dest_frame.data[2], dest_frame.linesize[2],
-    // ) };
-    canvas.copy(texture, None, None)
-    // unsafe { SDL_RenderCopy(canvas, texture.raw(), ptr::null(), ptr::null()) }
-}
-
-
 fn frame_thru_filter(filter: &crate::filter::RotateFilter, frame: &mut AVFrame) -> AVFrame
 {
     let filt_frame =
