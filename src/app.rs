@@ -31,20 +31,6 @@ use rusty_ffmpeg::ffi::sws_getCachedContext;
 use rusty_ffmpeg::ffi::sws_getContext;
 use rusty_ffmpeg::ffi::sws_freeContext;
 use rusty_ffmpeg::ffi::sws_scale;
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
-use sdl2::pixels::Color;
-use sdl2::pixels::PixelFormatEnum;
-use sdl2::render::{Canvas, Texture, TextureAccess};
-use sdl2::sys::SDL_PixelFormat;
-use sdl2::sys::SDL_PixelFormatEnum;
-use sdl2::sys::SDL_RenderCopy;
-use sdl2::sys::SDL_Texture;
-use sdl2::sys::SDL_TextureAccess;
-use sdl2::sys::SDL_UpdateTexture;
-use sdl2::sys::SDL_UpdateYUVTexture;
-use sdl2::video;
-use sdl2::video::Window;
 
 use crate::filter::RotateFilter;
 use crate::movie_state;
@@ -288,9 +274,9 @@ unsafe impl Send for Storage<'_>{}
 
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
- pub unsafe extern "C" fn play_movie(movie_state: *const MovieState) {
+ pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) {
 
-    let movie_state = movie_state.as_ref().unwrap();
+    let movie_state = movie_state.as_mut().unwrap();
     let format_context = std::sync::Arc::clone(&movie_state.format_context);
     // let codec_context = unsafe {movie_state.video_ctx.as_mut().unwrap()};
     let codec_context = unsafe {movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap()};
@@ -352,13 +338,14 @@ unsafe impl Send for Storage<'_>{}
     let pause_packets2 = std::sync::Arc::clone(&pause_packets);
     let pause_packets3 = std::sync::Arc::clone(&pause_packets);
     let movie_state = std::sync::Arc::new(movie_state);
-    let arc_movie_state = std::sync::Arc::clone(&movie_state);
+    let arc_movie_state2 = std::sync::Arc::clone(&movie_state);
+    let arc_movie_state3 = std::sync::Arc::clone(&movie_state);
 
-    // std::thread::spawn(move|| {
-    //     for msg in rx {
-    //         println!("received message: {}", msg);
-    //     }
-    // });
+    std::thread::spawn(move|| {
+        for msg in rx {
+            println!("received message: {}", msg);
+        }
+    });
     let packet_thread = std::thread::spawn(move|| {
         loop {
             if !keep_running2.load(std::sync::atomic::Ordering::Relaxed) {
@@ -389,8 +376,8 @@ unsafe impl Send for Storage<'_>{}
                 // break 'running;
             }
             {
-                if arc_movie_state.video_stream_idx == packet.stream_index as i64 {
-                    while let Err(_) = arc_movie_state.enqueue_packet(packet) {
+                if arc_movie_state2.video_stream_idx == packet.stream_index as i64 {
+                    while let Err(_) = arc_movie_state2.enqueue_packet(packet) {
                         // ::std::thread::sleep(Duration::from_millis(4));
                         ::std::thread::yield_now();
                         if !keep_running2.load(std::sync::atomic::Ordering::Relaxed) {
@@ -416,25 +403,25 @@ unsafe impl Send for Storage<'_>{}
     // let videoqueue =  movie_state.videoqueue.clone();
     // let video_ctx =  movie_state.video_ctx.clone();
     // let picq =  movie_state.picq.clone();
-    let arc_movie_state = std::sync::Arc::clone(&movie_state);
+    // let arc_movie_state = std::sync::Arc::clone(&arc_movie_state);
     let decode_thread = std::thread::spawn(move || {
         loop {
         unsafe {
 
             let mut frame = ffi::av_frame_alloc().as_mut()
                 .expect("failed to allocated memory for AVFrame");
-            let mut locked_videoqueue = arc_movie_state.videoqueue.lock().unwrap();
+            let mut locked_videoqueue = arc_movie_state3.videoqueue.lock().unwrap();
             if let Some(packet) = locked_videoqueue.front_mut() {
                 // !Note that AVPacket.pts is in AVStream.time_base units, not AVCodecContext.time_base units.
                 // let mut delay:f64 = packet.ptr.as_ref().unwrap().pts as f64 - last_pts as f64;
                 // last_pts = packet.ptr.as_ref().unwrap().pts;
-                if let Ok(_) = decode_packet(packet.ptr, arc_movie_state.video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
+                if let Ok(_) = decode_packet(packet.ptr, arc_movie_state3.video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
                     {
                         // let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
                         // delay *= (time_base.num as f64) / (time_base.den as f64);
                     }
 
-                    while let Err(_) = arc_movie_state.enqueue_frame(frame) {
+                    while let Err(_) = arc_movie_state3.enqueue_frame(frame) {
                         ::std::thread::yield_now();
                         ::std::thread::sleep(Duration::from_millis(4));
                         if ! keep_running3.load(std::sync::atomic::Ordering::Relaxed) {
@@ -461,7 +448,7 @@ unsafe impl Send for Storage<'_>{}
 
 
     let mut subsystem = platform::init_subsystem(window_width, window_height).unwrap();
-    platform::event_loop(&movie_state, &mut subsystem);
+    platform::event_loop(&movie_state, &mut subsystem, tx);
 
     unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
     unsafe { sws_freeContext(sws_ctx as *mut _) };

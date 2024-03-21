@@ -15,6 +15,7 @@ pub struct MovieState {
     pub video_stream: Arc<Mutex<StreamWrapper>>,
     pub video_ctx: Arc<Mutex<CodecContextWrapper>>,
     pub picq: Arc<Mutex<VecDeque<FrameWrapper>>>,
+    pub paused: std::sync::atomic::AtomicBool,
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
@@ -51,6 +52,7 @@ impl MovieState {
             video_stream: Arc::new(Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()})),
             video_ctx: Arc::new(Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()})),
             picq: Arc::new(Mutex::new(VecDeque::with_capacity(3))),
+            paused: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -102,6 +104,15 @@ impl MovieState {
         }
         let front = pq.front().unwrap();
         unsafe {Some(front.ptr.as_ref().unwrap().pts)}
+    }
+
+    pub fn pause(&self) {
+        let state = self.paused.load(std::sync::atomic::Ordering::Relaxed);
+        self.paused.store(!state, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_paused(&self) -> bool{
+        self.paused.load(std::sync::atomic::Ordering::Relaxed)
     }
 
 }

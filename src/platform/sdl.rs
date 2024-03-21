@@ -1,5 +1,5 @@
 
-use std::{time::Duration, thread::ThreadId};
+use std::{time::Duration, thread::ThreadId, borrow::{Borrow, BorrowMut}, ops::DerefMut, sync::Mutex};
 
 use libc::IFLA_NEW_IFINDEX;
 use rusty_ffmpeg::ffi::{self, SwsContext, AVPixelFormat_AV_PIX_FMT_ARGB};
@@ -35,7 +35,7 @@ pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<Sd
     // return Err(());
 }
 
-pub unsafe fn event_loop(movie_state: &movie_state::MovieState, subsystem: &mut SdlSubsystemCtx) {
+pub unsafe fn event_loop(movie_state: &movie_state::MovieState, subsystem: &mut SdlSubsystemCtx, tx: std::sync::mpsc::Sender<String>) {
 
     subsystem.canvas.set_draw_color(Color::RGB(0, 255, 255));
     subsystem.canvas.clear();
@@ -66,6 +66,8 @@ pub unsafe fn event_loop(movie_state: &movie_state::MovieState, subsystem: &mut 
                     break 'running;
                 },
                 Event::KeyDown { keycode: Some(Keycode::Space), .. } => {
+                    tx.send("pause".to_string()).unwrap();
+                    movie_state.pause();
                     // pause_packets.store(!pause_packets.load(std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
                     // packet_thread.thread().unpark();
                 },
@@ -75,14 +77,10 @@ pub unsafe fn event_loop(movie_state: &movie_state::MovieState, subsystem: &mut 
         }
         // The rest of the game loop goes here...
 
-        // if pause_packets3.load(std::sync::atomic::Ordering::Relaxed) {
-        //     continue;
-        // }
-
-        // if keep_running.load(std::sync::atomic::Ordering::Relaxed) == false {
-        //     break 'running;
-        // }
-
+        if movie_state.is_paused() == true {
+            std::thread::yield_now();
+            continue;
+        }
 
         unsafe {
             if let Some(pts) = movie_state.peek_frame_pts() {
