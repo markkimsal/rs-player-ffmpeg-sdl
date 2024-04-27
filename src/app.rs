@@ -425,7 +425,7 @@ unsafe impl Send for Storage<'_>{}
 
 
     let mut subsystem = platform::init_subsystem(window_width, window_height).unwrap();
-    platform::event_loop(&movie_state, &mut subsystem, tx);
+    platform::event_loop(&movie_state, &mut subsystem, tx, &rotate_filter);
 
     unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
     unsafe { sws_freeContext(sws_ctx as *mut _) };
