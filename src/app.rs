@@ -1,53 +1,25 @@
-#![allow(unused_imports, unused_variables, unused_mut, dead_code)]
-use std::borrow::Borrow;
-use std::borrow::BorrowMut;
+#![allow(unused_variables)]
 use std::ffi::CStr;
 use std::ffi::CString;
-use std::ops::Deref;
-use std::ops::DerefMut;
-use std::panic::panic_any;
 use std::ptr;
 use std::ptr::NonNull;
-use std::rc::Rc;
-use std::slice;
 use std::sync::Mutex;
 use std::time::Duration;
 use rusty_ffmpeg::ffi;
 
-use libc::{size_t, c_int};
 use rusty_ffmpeg::ffi::AVFrame;
-use rusty_ffmpeg::ffi::AVPictureType_AV_PICTURE_TYPE_P;
 use rusty_ffmpeg::ffi::AVPixelFormat_AV_PIX_FMT_ARGB;
-use rusty_ffmpeg::ffi::AVPixelFormat_AV_PIX_FMT_YUV410P;
 use rusty_ffmpeg::ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
-use rusty_ffmpeg::ffi::AVPixelFormat_AV_PIX_FMT_YUVJ420P;
-use rusty_ffmpeg::ffi::AV_TIME_BASE_Q;
 use rusty_ffmpeg::ffi::SWS_BILINEAR;
-use rusty_ffmpeg::ffi::SwsContext;
 use rusty_ffmpeg::ffi::av_frame_free;
-use rusty_ffmpeg::ffi::av_freep;
-use rusty_ffmpeg::ffi::sws_getCachedContext;
 use rusty_ffmpeg::ffi::sws_getContext;
 use rusty_ffmpeg::ffi::sws_freeContext;
-use rusty_ffmpeg::ffi::sws_scale;
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
-use sdl2::pixels::Color;
-use sdl2::pixels::PixelFormatEnum;
-use sdl2::render::{Canvas, Texture, TextureAccess};
-use sdl2::sys::SDL_PixelFormat;
-use sdl2::sys::SDL_PixelFormatEnum;
-use sdl2::sys::SDL_RenderCopy;
-use sdl2::sys::SDL_Texture;
-use sdl2::sys::SDL_TextureAccess;
-use sdl2::sys::SDL_UpdateTexture;
-use sdl2::sys::SDL_UpdateYUVTexture;
-use sdl2::video::Window;
 
-use crate::filter::RotateFilter;
-use crate::movie_state;
 use crate::movie_state::CodecContextWrapper;
 use crate::movie_state::MovieState;
+
+#[cfg_attr(target_os="linux", path="platform/sdl.rs")]
+mod platform;
 
 // #[path="filter.rs"]
 // mod filter;
@@ -283,9 +255,9 @@ unsafe impl Send for Storage<'_>{}
 
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
- pub unsafe extern "C" fn play_movie(movie_state: *const MovieState) {
+ pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) {
 
-    let movie_state = movie_state.as_ref().unwrap();
+    let movie_state = movie_state.as_mut().unwrap();
     let format_context = std::sync::Arc::clone(&movie_state.format_context);
     // let codec_context = unsafe {movie_state.video_ctx.as_mut().unwrap()};
     let codec_context = unsafe {movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap()};
@@ -309,28 +281,6 @@ unsafe impl Send for Storage<'_>{}
         -90 => (450, 800),
         _  => (800, 450)
     };
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
-
-    let window = video_subsystem.window("rs-player-ffmpeg-sdl2", window_width, window_height)
-        .position_centered()
-        .build()
-        .unwrap();
-
-    let mut canvas = window.into_canvas().build().unwrap();
-
-    canvas.set_draw_color(Color::RGB(0, 255, 255));
-    canvas.clear();
-    canvas.present();
-    let texture_creator = canvas.texture_creator();
-    let mut texture = texture_creator.create_texture(
-        Some(PixelFormatEnum::ARGB32),
-        TextureAccess::Streaming,
-        // 800,450
-        // 450,800
-        window_width,
-        window_height
-    ).unwrap();
     // let frame = unsafe { ffi::av_frame_alloc().as_mut() }
     //     .expect("failed to allocated memory for AVFrame");
     // let packet = unsafe { ffi::av_packet_alloc().as_mut() }
@@ -357,10 +307,7 @@ unsafe impl Send for Storage<'_>{}
     let frame = unsafe {ffi::av_frame_alloc().as_mut()}
         .expect("failed to allocated memory for AVFrame");
     let (tx, rx) = std::sync::mpsc::channel::<String>();
-    // let rc_movie_state = Rc::clone(&movie_state);
-    // let format_context = std::sync::Arc::new(Mutex::new(movie_state.format_context));
     let arc_format_context = std::sync::Arc::clone(&movie_state.format_context);
-    // let video_ctx = std::sync::Arc::new(Mutex::new(movie_state.video_ctx));
     let arc_video_ctx = std::sync::Arc::clone(&movie_state.video_ctx);
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let keep_running2 = std::sync::Arc::clone(&keep_running);
@@ -369,13 +316,13 @@ unsafe impl Send for Storage<'_>{}
     let pause_packets2 = std::sync::Arc::clone(&pause_packets);
     let pause_packets3 = std::sync::Arc::clone(&pause_packets);
     let movie_state = std::sync::Arc::new(movie_state);
-    let arc_movie_state = std::sync::Arc::clone(&movie_state);
 
-    // std::thread::spawn(move|| {
-    //     for msg in rx {
-    //         println!("received message: {}", msg);
-    //     }
-    // });
+    let arc_movie_state = std::sync::Arc::clone(&movie_state);
+    std::thread::spawn(move|| {
+        for msg in rx {
+            println!("🦀🦀 received message: {}", msg);
+        }
+    });
     let packet_thread = std::thread::spawn(move|| {
         loop {
             if !keep_running2.load(std::sync::atomic::Ordering::Relaxed) {
@@ -422,74 +369,69 @@ unsafe impl Send for Storage<'_>{}
             if pause_packets2.load(std::sync::atomic::Ordering::Relaxed) {
                 ::std::thread::park();
             }
-       }
+            ::std::thread::yield_now();
+        }
         };
     });
-    let mut event_pump = sdl_context.event_pump().unwrap();
-    let mut i = 0;
-    let mut last_pts = 0;
-    let mut last_clock = ffi::av_gettime_relative();
-    'running: loop {
-        i = (i + 1) % 255;
-        // canvas.set_draw_color(Color::RGB(i, 64, 255 - i));
-        // canvas.clear();
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit {..} |
-                Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                    keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
-                    break 'running
-                },
-                Event::KeyDown { keycode: Some(Keycode::Space), .. } => {
-                    pause_packets.store(!pause_packets.load(std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
-                    packet_thread.thread().unpark();
-                },
 
-                _ => {}
-            }
-        }
-        // The rest of the game loop goes here...
-
-        if pause_packets3.load(std::sync::atomic::Ordering::Relaxed) {
-            continue;
-        }
-
-        if keep_running.load(std::sync::atomic::Ordering::Relaxed) == false {
-            break 'running;
-        }
-
+    let i = 0;
+    let last_pts = 0;
+    let last_clock = ffi::av_gettime_relative();
+    // let videoqueue =  movie_state.videoqueue.clone();
+    // let video_ctx =  movie_state.video_ctx.clone();
+    // let picq =  movie_state.picq.clone();
+    let arc_movie_state = std::sync::Arc::clone(&movie_state);
+    let decode_thread = std::thread::spawn(move || {
+        loop {
         unsafe {
-            let mut locked_videoqueue = movie_state.videoqueue.lock().unwrap();
+
+            let frame = ffi::av_frame_alloc().as_mut()
+                .expect("failed to allocated memory for AVFrame");
+            let mut locked_videoqueue = arc_movie_state.videoqueue.lock().unwrap();
             if let Some(packet) = locked_videoqueue.front_mut() {
                 // !Note that AVPacket.pts is in AVStream.time_base units, not AVCodecContext.time_base units.
-                let mut delay:f64 = packet.ptr.as_ref().unwrap().pts as f64 - last_pts as f64;
-                last_pts = packet.ptr.as_ref().unwrap().pts;
-                if let Ok(_) = decode_packet(packet.ptr, movie_state.video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
-
+                // let mut delay:f64 = packet.ptr.as_ref().unwrap().pts as f64 - last_pts as f64;
+                // last_pts = packet.ptr.as_ref().unwrap().pts;
+                if let Ok(_) = decode_packet(packet.ptr, arc_movie_state.video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
                     {
-                        let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
-                        delay *= (time_base.num as f64) / (time_base.den as f64);
+                        // let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
+                        // delay *= (time_base.num as f64) / (time_base.den as f64);
                     }
-                    blit_frame(frame, dest_frame, &mut canvas, &mut texture, sws_ctx, &rotate_filter).unwrap_or_default();
-                }
-                ffi::av_packet_free(&mut (packet.ptr));
-                locked_videoqueue.pop_front();
 
-                // println!("av_gettime_relative: {}", (ffi::av_gettime_relative() - last_clock ) );
-                delay -= (ffi::av_gettime_relative() - last_clock ) as f64 / 1_000_000.0;
-                // TODO: less than 2 * FPS
-                if delay > 0.0 && delay < 1.0 {
-                    ::std::thread::sleep(Duration::from_secs_f64(delay));
+                    while let Err(_) = arc_movie_state.enqueue_frame(frame) {
+                        ::std::thread::yield_now();
+                        ::std::thread::sleep(Duration::from_millis(4));
+                        if ! keep_running3.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                    }
+
+                } else {
+                    ffi::av_freep(frame as *mut _ as *mut _);
                 }
-                last_clock = ffi::av_gettime_relative();
+                ffi::av_packet_unref(packet.ptr);
+                locked_videoqueue.pop_front();
+            }
+            ::std::thread::yield_now();
+            if ! keep_running3.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            if pause_packets3.load(std::sync::atomic::Ordering::Relaxed) {
+                ::std::thread::park();
             }
         }
+        };
+    });
 
-        canvas.present();
-    }
+
+    let mut subsystem = platform::init_subsystem(window_width, window_height).unwrap();
+    platform::event_loop(&movie_state, &mut subsystem, tx, &rotate_filter);
+
     unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
     unsafe { sws_freeContext(sws_ctx as *mut _) };
 
+    keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+    decode_thread.join().unwrap();
     packet_thread.join().unwrap();
 }
 
@@ -501,6 +443,7 @@ fn decode_packet(
     let mut response = unsafe { ffi::avcodec_send_packet(codec_context, packet) };
 
     if response < 0 {
+        eprintln!("Error while sending a packet to the decoder. {:?}", ffi::av_err2str(response));
         return Err(String::from("Error while sending a packet to the decoder."));
     }
     while response >= 0 {
@@ -529,59 +472,6 @@ fn decode_packet(
         return Ok(());
     }
     Ok(())
-}
-
-
-fn blit_frame(
-    src_frame: &mut ffi::AVFrame,
-    dest_frame: &mut ffi::AVFrame,
-    canvas: &mut Canvas<Window>,
-    texture: &mut Texture,
-    sws_ctx: *mut SwsContext,
-    filter: &crate::filter::RotateFilter,
-) -> Result<(), String> {
-
-        let  new_frame = frame_thru_filter(filter, src_frame);
-
-        // dest_frame.width  = new_frame.width;
-        // dest_frame.height = new_frame.height;
-        dest_frame.width  = canvas.window().size().0 as i32;
-        dest_frame.height = canvas.window().size().1 as i32;
-        dest_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
-
-        unsafe {
-            ffi::av_frame_get_buffer(dest_frame, 0);
-             sws_scale(
-                sws_ctx,
-                new_frame.data.as_ptr() as _,
-                new_frame.linesize.as_ptr(),
-                0,
-                new_frame.height,
-                // codec_context.height,
-                dest_frame.data.as_mut_ptr(),
-                dest_frame.linesize.as_mut_ptr()
-            )
-        };
-
-    let new_frame = dest_frame;
-    // unsafe { SDL_UpdateTexture(
-    //     texture.raw(), ptr::null(),
-    //     (*dest_frame).data[0] as _, (*dest_frame).linesize[0] as _
-    // ) };
-    unsafe { SDL_UpdateTexture(
-        texture.raw(), ptr::null(),
-        (new_frame).data[0] as _, (new_frame).linesize[0] as _
-    ) };
-
-    // SDL cannot handle YUV(J)420P
-    // unsafe { SDL_UpdateYUVTexture(
-    //     texture.raw(), ptr::null(),
-    //     dest_frame.data[0], dest_frame.linesize[0],
-    //     dest_frame.data[1], dest_frame.linesize[1],
-    //     dest_frame.data[2], dest_frame.linesize[2],
-    // ) };
-    canvas.copy(texture, None, None)
-    // unsafe { SDL_RenderCopy(canvas, texture.raw(), ptr::null(), ptr::null()) }
 }
 
 

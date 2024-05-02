@@ -12,7 +12,6 @@ fn main() {
         let filepath: std::ffi::CString = std::ffi::CString::new(args.get(1).unwrap_or(&default_file).as_str()).unwrap();
         open_movie(filepath.as_ptr(), &mut video_state);
     }
-    // let (_, format_context, codec_context) = open_input(args.get(1).unwrap_or(&default_file));
     // open_window(format_context, codec_context);
     unsafe {play_movie(&mut video_state); }
 }
