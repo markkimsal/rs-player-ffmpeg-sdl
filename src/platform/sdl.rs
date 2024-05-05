@@ -159,33 +159,7 @@ fn blit_frame(
         dest_frame.height = canvas.window().size().1 as i32;
         dest_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
 
-        unsafe {
-            let sws_ctx = ffi::sws_getCachedContext(
-                ::std::ptr::null_mut(),
-                new_frame.width,
-                new_frame.height,
-                ffi::AVPixelFormat_AV_PIX_FMT_YUV420P,
-                dest_frame.width,
-                dest_frame.height,
-                AVPixelFormat_AV_PIX_FMT_ARGB,
-                ffi::SWS_BILINEAR as i32,
-                ::std::ptr::null_mut(),
-                ::std::ptr::null_mut(),
-                ::std::ptr::null_mut(),
-            );
 
-
-            ffi::av_frame_get_buffer(dest_frame, 0);
-            ffi::sws_scale(
-                sws_ctx,
-                new_frame.data.as_ptr() as _,
-                new_frame.linesize.as_ptr(),
-                0,
-                new_frame.height,
-                dest_frame.data.as_mut_ptr(),
-                dest_frame.linesize.as_mut_ptr()
-            )
-        };
 
     // let new_frame = dest_frame;
     unsafe { SDL_UpdateTexture(
