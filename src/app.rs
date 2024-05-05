@@ -10,10 +10,7 @@ use rusty_ffmpeg::ffi;
 use rusty_ffmpeg::ffi::AVFrame;
 use rusty_ffmpeg::ffi::AVPixelFormat_AV_PIX_FMT_ARGB;
 use rusty_ffmpeg::ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
-use rusty_ffmpeg::ffi::SWS_BILINEAR;
 use rusty_ffmpeg::ffi::av_frame_free;
-use rusty_ffmpeg::ffi::sws_getContext;
-use rusty_ffmpeg::ffi::sws_freeContext;
 
 use crate::movie_state::CodecContextWrapper;
 use crate::movie_state::MovieState;
@@ -289,21 +286,6 @@ unsafe impl Send for Storage<'_>{}
         unsafe { ffi::av_frame_alloc().as_mut() }
         .expect("failed to allocated memory for AVFrame");
 
-    // we are going to rotate before scale, so input w/h needs to be flipped depending
-    // on rotation flags
-    let sws_ctx = unsafe { sws_getContext(
-        match rotation { 90 => codec_context.height, _ => codec_context.width},
-        match rotation { 90 => codec_context.width, _ => codec_context.height},
-        AVPixelFormat_AV_PIX_FMT_YUV420P,
-        window_width as i32,
-        window_height as i32,
-        AVPixelFormat_AV_PIX_FMT_ARGB,
-        SWS_BILINEAR as i32,
-        ptr::null_mut(),
-        ptr::null_mut(),
-        ptr::null_mut(),
-    ) };
-
     let frame = unsafe {ffi::av_frame_alloc().as_mut()}
         .expect("failed to allocated memory for AVFrame");
     let (tx, rx) = std::sync::mpsc::channel::<String>();
@@ -428,7 +410,6 @@ unsafe impl Send for Storage<'_>{}
     platform::event_loop(&movie_state, &mut subsystem, tx, &rotate_filter);
 
     unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
-    unsafe { sws_freeContext(sws_ctx as *mut _) };
 
     keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
     decode_thread.join().unwrap();
