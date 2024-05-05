@@ -120,6 +120,7 @@ pub unsafe fn event_loop(movie_state: &movie_state::MovieState, subsystem: &mut 
                     ::std::thread::sleep(Duration::from_secs_f64(1. / delay));
                 }
             }
+
             if let Some(frame) = movie_state.dequeue_frame() {
                 let dest_frame =
                     ffi::av_frame_alloc().as_mut()

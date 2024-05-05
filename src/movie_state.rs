@@ -2,6 +2,7 @@
 use std::{ops::Deref, sync::{Arc, Mutex}, collections::VecDeque};
 
 use rusty_ffmpeg::ffi::{self};
+use sdl2::video;
 #[repr(C)]
 pub struct MovieState {
     pub format_context: Arc<Mutex<FormatContextWrapper>>,
@@ -16,6 +17,9 @@ pub struct MovieState {
     pub video_ctx: Arc<Mutex<CodecContextWrapper>>,
     pub picq: Arc<Mutex<VecDeque<FrameWrapper>>>,
     pub paused: std::sync::atomic::AtomicBool,
+    pub in_vfilter: *const ffi::AVFilterContext,   // the first filter in the video chain
+    pub out_vfilter: *const ffi::AVFilterContext,   // the last filter in the video chain
+    pub vgraph: *const ffi::AVFilterGraph,
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
@@ -53,6 +57,9 @@ impl MovieState {
             video_ctx: Arc::new(Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()})),
             picq: Arc::new(Mutex::new(VecDeque::with_capacity(3))),
             paused: std::sync::atomic::AtomicBool::new(false),
+            in_vfilter: std::ptr::null(),
+            out_vfilter: std::ptr::null(),
+            vgraph: std::ptr::null(),
         }
     }
 }
@@ -116,6 +123,25 @@ impl MovieState {
     }
 
 }
+pub fn movie_state_enqueue_packet(videoqueue: &Arc<Mutex<VecDeque<PacketWrapper>>>, packet: *mut ffi::AVPacket) -> Result<(), ()> {
+    let mut vq = videoqueue.lock().unwrap();
+    if vq.len() >= 10 {
+        return Err(());
+    }
+    vq.push_back(PacketWrapper{ptr:packet});
+    return Ok(());
+}
+pub fn movie_state_enqueue_frame(picq: &Arc<Mutex<VecDeque<FrameWrapper>>>, frame: *mut ffi::AVFrame) -> Result<(), ()> {
+    let mut pq = picq.lock().unwrap();
+    if pq.len() >= 4 {
+        // eprintln!("dropping frame");
+        return Err(());
+    }
+    pq.push_back(FrameWrapper{ptr:frame});
+    return Ok(());
+}
+
+
 
 pub struct FormatContextWrapper {
     pub ptr: *mut ffi::AVFormatContext,
