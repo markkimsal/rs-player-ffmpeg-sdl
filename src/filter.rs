@@ -1,7 +1,9 @@
 
 #![allow(unused_variables, non_camel_case_types)]
-use std::ffi::{CString, CStr};
+use std::{ffi::{CStr, CString}, ptr::{null, null_mut}};
 use rusty_ffmpeg::ffi::{self};
+
+use crate::filter;
 
 
 /*
@@ -19,9 +21,9 @@ pub struct RotateFilter {
 //pub fn init_filter(avblock* block, char* filters_descr) -> i32
 pub fn init_filter(
     rotation: i32,
-    filter_graph: &mut *mut ffi::AVFilterGraph,
+    filter_graph: &mut  *mut ffi::AVFilterGraph,
     buffersink_ctx: &mut *mut ffi::AVFilterContext,
-    buffersrc_ctx: &mut *mut ffi::AVFilterContext,
+    buffersrc_ctx: &mut  *mut ffi::AVFilterContext,
     wh: (i32, i32),
     format: i32,
 ) -> i32 {
@@ -36,9 +38,9 @@ pub fn init_filter(
 	let time_base: ffi::AVRational  = ffi::AVRational{num: 1, den: 240};
 
 	unsafe {
-        if !buffersink_ctx.is_null() {ffi::avfilter_free(*buffersink_ctx);}
-        if !buffersrc_ctx.is_null() {ffi::avfilter_free(*buffersrc_ctx);}
-        ffi::avfilter_graph_free(filter_graph) ;
+        if !buffersink_ctx.is_null() {ffi::avfilter_free(buffersink_ctx.as_mut().unwrap());}
+        if !buffersrc_ctx.is_null() {ffi::avfilter_free(buffersrc_ctx.as_mut().unwrap());}
+        ffi::avfilter_graph_free(filter_graph as *mut _);
         *filter_graph = ffi::avfilter_graph_alloc();
 
         if outputs.is_null() || inputs.is_null() || filter_graph.is_null() {
@@ -74,7 +76,7 @@ pub fn init_filter(
     unsafe {
         let in_buff = CString::new("in").unwrap();
         let ret = ffi::avfilter_graph_create_filter(
-            buffersrc_ctx,
+            &mut *buffersrc_ctx as *mut _,
             buffer_src,
             (&in_buff as &CStr).as_ptr(),
             // std::ptr::null(),
@@ -103,11 +105,10 @@ pub fn init_filter(
         let out_buff = CString::new("out").unwrap();
         /* buffer video sink: to terminate the filter chain. */
         let ret = ffi::avfilter_graph_create_filter(
-            buffersink_ctx as *mut _,
+            buffersink_ctx as *mut *mut _,
             buffer_sink,
             out_buff.as_ptr(),
             std::ptr::null(),
-            // args.as_ptr() as *const _,
             std::ptr::null_mut(),
             *filter_graph
         );
@@ -116,6 +117,7 @@ pub fn init_filter(
             ffi::avfilter_inout_free(&mut outputs as *mut _);
             return ret;
         }
+        ffi::avfilter_link(*buffersrc_ctx, 0, *buffersink_ctx, 0);
 
         // The buffer sink input must be connected to the output pad of
         // the last filter described by filters_descr; since the last
@@ -145,23 +147,27 @@ pub fn init_filter(
     // be linked to the graph described by filters_descr.
     //
     unsafe {
-        let transpose = match rotation {
-            90 => "transpose=1",
-            270 => "transpose=2",
-            -90 => "transpose=3",
-            _  => "tpad=0",
-        };
-        let filter_desc = CString::new(transpose).unwrap();
-        let ret = ffi::avfilter_graph_parse_ptr(
-            *filter_graph,
-            filter_desc.as_ptr(),
-            &mut inputs as *mut _,
-            &mut outputs as *mut _,
-            std::ptr::null_mut()
-        );
-        if ret >= 0 {
-            ffi::avfilter_graph_config(*filter_graph as *mut _, std::ptr::null_mut());
-        }
+
+        // let transpose = match rotation {
+        //     90 => "transpose=1",
+        //     270 => "transpose=2",
+        //     -90 => "transpose=3",
+        //     _  => "tpad=0",
+        // };
+        // let filter_desc = CString::new(transpose).unwrap();
+        // let ret = ffi::avfilter_graph_parse_ptr(
+        //     *filter_graph,
+        //     filter_desc.as_ptr(),
+        //     &mut inputs as *mut _,
+        //     &mut outputs as *mut _,
+        //     std::ptr::null_mut()
+        // );
+        // if ret >= 0 {
+        //     ffi::avfilter_graph_config(*filter_graph as *mut _, std::ptr::null_mut());
+        // }
+        // ffi::avfilter_graph_parse_ptr(*filter_graph, null(), &mut inputs as *mut _, &mut outputs as *mut _, null_mut());
+
+        ffi::avfilter_graph_config(*filter_graph as *mut _, std::ptr::null_mut());
 		ffi::avfilter_inout_free(&mut inputs  as *mut _);
 		ffi::avfilter_inout_free(&mut outputs  as *mut _);
     }

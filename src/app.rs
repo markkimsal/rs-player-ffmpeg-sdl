@@ -3,13 +3,12 @@ use std::ffi::CStr;
 use std::ffi::CString;
 use std::ptr;
 use std::ptr::NonNull;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use rusty_ffmpeg::ffi;
 
 use rusty_ffmpeg::ffi::AVFrame;
-use rusty_ffmpeg::ffi::AVPixelFormat_AV_PIX_FMT_ARGB;
-use rusty_ffmpeg::ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
 use rusty_ffmpeg::ffi::av_frame_free;
 
 use crate::movie_state::movie_state_enqueue_frame;
@@ -22,15 +21,15 @@ mod platform;
 
 // #[path="filter.rs"]
 // mod filter;
-fn rotation_filter_init() -> crate::filter::RotateFilter {
-    unsafe {
-        crate::filter::RotateFilter {
-            filter_graph: ffi::avfilter_graph_alloc(),
-            buffersink_ctx: std::ptr::null_mut(),
-            buffersrc_ctx:  std::ptr::null_mut(),
-        }
-    }
-}
+// fn rotation_filter_init() -> crate::filter::RotateFilter {
+//     unsafe {
+//         crate::filter::RotateFilter {
+//             filter_graph: ffi::avfilter_graph_alloc(),
+//             buffersink_ctx: std::ptr::null_mut(),
+//             buffersrc_ctx:  std::ptr::null_mut(),
+//         }
+//     }
+// }
 
 #[no_mangle]
 pub unsafe extern "C" fn new_movie_state() -> *mut MovieState {
@@ -256,20 +255,20 @@ unsafe impl Send for Storage<'_>{}
 #[allow(improper_ctypes_definitions)]
  pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) {
 
-    let movie_state = movie_state.as_mut().unwrap();
+    let mut movie_state = movie_state.as_mut().unwrap();
     let format_context = std::sync::Arc::clone(&movie_state.format_context);
-    // let codec_context = unsafe {movie_state.video_ctx.as_mut().unwrap()};
+    // // let codec_context = unsafe {movie_state.video_ctx.as_mut().unwrap()};
     let codec_context = unsafe {movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap()};
     let rotation = unsafe { get_orientation_metadata_value((*format_context).lock().unwrap().ptr) };
-    let mut rotate_filter = rotation_filter_init();
-    crate::filter::init_filter(
-        rotation,
-        &mut rotate_filter.filter_graph,
-        &mut rotate_filter.buffersink_ctx,
-        &mut rotate_filter.buffersrc_ctx,
-        (codec_context.width, codec_context.height),
-        codec_context.pix_fmt
-    );
+    // let mut rotate_filter = rotation_filter_init();
+    // crate::filter::init_filter(
+    //     rotation,
+    //     &mut rotate_filter.filter_graph,
+    //     &mut rotate_filter.buffersink_ctx,
+    //     &mut rotate_filter.buffersrc_ctx,
+    //     (codec_context.width, codec_context.height),
+    //     codec_context.pix_fmt
+    // );
 
     // let (window_width, window_height): (u32, u32) = match rotation {
     //     90 => (codec_context.height as u32 / 2, codec_context.width as u32 / 2),
@@ -378,7 +377,7 @@ unsafe impl Send for Storage<'_>{}
                 // !Note that AVPacket.pts is in AVStream.time_base units, not AVCodecContext.time_base units.
                 // let mut delay:f64 = packet.ptr.as_ref().unwrap().pts as f64 - last_pts as f64;
                 // last_pts = packet.ptr.as_ref().unwrap().pts;
-                if let Ok(_) = decode_packet(packet.ptr, video_ctx.lock().unwrap().ptr.as_mut().unwrap(), frame) {
+                if let Ok(_) = decode_packet(packet.ptr, video_ctx.clone(), frame) {
                     {
                         // let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
                         // delay *= (time_base.num as f64) / (time_base.den as f64);
@@ -411,7 +410,7 @@ unsafe impl Send for Storage<'_>{}
 
 
     let mut subsystem = platform::init_subsystem(window_width, window_height).unwrap();
-    platform::event_loop(&movie_state, &mut subsystem, tx, &rotate_filter);
+    platform::event_loop(&mut movie_state, &mut subsystem, tx);
 
     unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
 
@@ -422,9 +421,14 @@ unsafe impl Send for Storage<'_>{}
 
 fn decode_packet(
     packet: *mut ffi::AVPacket,
-    codec_context: *mut ffi::AVCodecContext,
+    arc_codec_context: Arc<Mutex<CodecContextWrapper>>,
     frame: &mut ffi::AVFrame,
 ) -> Result<(), String> {
+    let lock = arc_codec_context.try_lock();
+    if let Err(e) = lock {
+        return Err(String::from("Error while locking the codec context."));
+    }
+    let codec_context = unsafe {lock.unwrap().ptr.as_mut().unwrap()};
     let mut response = unsafe { ffi::avcodec_send_packet(codec_context, packet) };
 
     if response < 0 {
@@ -443,7 +447,7 @@ fn decode_packet(
                 "Error while receiving a frame from the decoder.",
             ));
         }
-        let codec_context = unsafe{codec_context.as_ref().unwrap()};
+        // let codec_context = unsafe{codec_context.as_ref().unwrap()};
         println!(
             "Frame {} (type={}, size={} bytes) pts {} key_frame {} [DTS {}]",
             codec_context.frame_number,
@@ -454,6 +458,7 @@ fn decode_packet(
             frame.key_frame,
             frame.pkt_dts
         );
+        frame.format = codec_context.pix_fmt;
         return Ok(());
     }
     Ok(())
