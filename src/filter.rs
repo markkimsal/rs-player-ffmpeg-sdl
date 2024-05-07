@@ -1,9 +1,7 @@
 
 #![allow(unused_variables, non_camel_case_types)]
-use std::{ffi::{CStr, CString}, ptr::{null, null_mut}};
+use std::ffi::{CStr, CString};
 use rusty_ffmpeg::ffi::{self};
-
-use crate::filter;
 
 
 /*

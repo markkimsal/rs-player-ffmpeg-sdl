@@ -112,22 +112,20 @@ pub unsafe extern "C" fn open_movie(filepath: *const libc::c_char, video_state: 
                     "Video Codec: resolution {} x {}",
                     local_codec_params.width, local_codec_params.height
                 );
-                println!(
-                    "Video Codec: {} {:?}",
-                    local_codec_params.codec_id,
-                    unsafe {
+                unsafe {
+                    println!(
+                        "Video Codec: {} {:?}",
+                        local_codec_params.codec_id,
                         match (*local_codec).long_name.is_null()  {
                             true => CStr::from_ptr((*local_codec).name),
                             false => CStr::from_ptr((*local_codec).long_name),
                         }
-                    },
-                );
+                    );
+                }
             },
             _ => {}
         }
     }
-//    let codec_context = unsafe { ffi::avcodec_alloc_context3(codec_ptr).as_mut() }.unwrap();
-
     if unsafe { ffi::avcodec_parameters_to_context((video_state.video_ctx.lock().unwrap()).ptr, codec_parameters_ptr) } < 0 {
         panic!("failed to copy codec params to codec context");
     }
@@ -151,31 +149,27 @@ pub unsafe extern "C" fn open_movie(filepath: *const libc::c_char, video_state: 
 }
 
 #[allow(improper_ctypes_definitions)]
-pub extern "C" fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFormatContext, &mut ffi::AVCodecContext) {
+pub unsafe extern "C" fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFormatContext, &mut ffi::AVCodecContext) {
 // unsafe {ffi::av_log_set_level(ffi::AV_LOG_DEBUG as i32)};
     let filepath: CString = CString::new(src).unwrap();
     let mut format_ctx = unsafe { ffi::avformat_alloc_context() };
 
     let format     = ptr::null_mut();
     let dict       = ptr::null_mut();
-    if unsafe {
-        ffi::avformat_open_input(&mut format_ctx, filepath.as_ptr(), format, dict)
-    } != 0 {
+    if ffi::avformat_open_input(&mut format_ctx, filepath.as_ptr(), format, dict) != 0 {
         panic!("🚩 cannot open file")
     }
-    let format_context = unsafe { format_ctx.as_mut() }.unwrap();
-    let format_name = unsafe { CStr::from_ptr((*(*format_ctx).iformat).name) }
+    let format_context = format_ctx.as_mut().unwrap();
+    let format_name = CStr::from_ptr((*(*format_ctx).iformat).name)
         .to_str()
         .unwrap();
 
-    if unsafe { ffi::avformat_find_stream_info(format_context, ptr::null_mut()) } < 0 {
+    if ffi::avformat_find_stream_info(format_context, ptr::null_mut()) < 0 {
         panic!("ERROR could not get the stream info");
     }
-    unsafe { ffi::av_dump_format(format_context, 0, filepath.as_ptr(), 0) };
+    ffi::av_dump_format(format_context, 0, filepath.as_ptr(), 0);
 
-    let streams = unsafe {
-        std::slice::from_raw_parts(format_context.streams, format_context.nb_streams as usize)
-    };
+    let streams = std::slice::from_raw_parts(format_context.streams, format_context.nb_streams as usize);
     let mut codec_ptr: *const ffi::AVCodec = ptr::null_mut();
     let mut codec_parameters_ptr: *const ffi::AVCodecParameters = ptr::null_mut();
     let mut video_stream_index = None;
@@ -215,24 +209,22 @@ pub extern "C" fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFor
                 println!(
                     "Video Codec: {} {:?}",
                     local_codec_params.codec_id,
-                    unsafe {
-                        match (*local_codec).long_name.is_null()  {
-                            true => CStr::from_ptr((*local_codec).name),
-                            false => CStr::from_ptr((*local_codec).long_name),
-                        }
-                    },
+                    match (*local_codec).long_name.is_null()  {
+                        true => CStr::from_ptr((*local_codec).name),
+                        false => CStr::from_ptr((*local_codec).long_name),
+                    }
                 );
             },
             _ => {}
         }
     }
-    let codec_context = unsafe { ffi::avcodec_alloc_context3(codec_ptr).as_mut() }.unwrap();
+    let codec_context = ffi::avcodec_alloc_context3(codec_ptr).as_mut().unwrap();
 
-    if unsafe { ffi::avcodec_parameters_to_context(codec_context, codec_parameters_ptr) } < 0 {
+    if ffi::avcodec_parameters_to_context(codec_context, codec_parameters_ptr) < 0 {
         panic!("failed to copy codec params to codec context");
     }
 
-    if unsafe { ffi::avcodec_open2(codec_context, codec_ptr, ptr::null_mut()) } < 0 {
+    if ffi::avcodec_open2(codec_context, codec_ptr, ptr::null_mut()) < 0 {
         panic!("failed to open codec through avcodec_open2");
     }
     let mut dur_s = format_context.duration / time_base_den as i64;
@@ -257,9 +249,8 @@ unsafe impl Send for Storage<'_>{}
 
     let mut movie_state = movie_state.as_mut().unwrap();
     let format_context = std::sync::Arc::clone(&movie_state.format_context);
-    // // let codec_context = unsafe {movie_state.video_ctx.as_mut().unwrap()};
-    let codec_context = unsafe {movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap()};
-    let rotation = unsafe { get_orientation_metadata_value((*format_context).lock().unwrap().ptr) };
+    let codec_context = movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap();
+    let rotation = get_orientation_metadata_value((*format_context).lock().unwrap().ptr);
     // let mut rotate_filter = rotation_filter_init();
     // crate::filter::init_filter(
     //     rotation,
