@@ -1,13 +1,19 @@
 
 use std::time::Duration;
 
-use rusty_ffmpeg::ffi::{self, AVPixelFormat_AV_PIX_FMT_ARGB};
+use rusty_ffmpeg::ffi::{self};
 
-use sdl2::{video::Window, render::{TextureAccess, Canvas, Texture}, pixels::{PixelFormatEnum, Color}, event::Event, keyboard::Keycode, Sdl, sys::SDL_UpdateTexture};
+use sdl2::{
+    event::Event,
+    keyboard::Keycode,
+    pixels::{Color, PixelFormatEnum},
+    render::{Canvas, Texture, TextureAccess},
+    sys::SDL_UpdateYUVTexture,
+    video::Window,
+    Sdl
+};
 
 use crate::movie_state;
-
-use super::frame_thru_filter;
 
 // static CANVAS: Option<Canvas<Window>> = None;
 pub struct SdlSubsystemCtx {
@@ -20,6 +26,7 @@ pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<Sd
     let video_subsystem = sdl_context.video().unwrap();
 
     let window = video_subsystem.window("rs-player-ffmpeg-sdl2", default_width, default_height)
+        .resizable()
         .position_centered()
         .build()
         .unwrap();
@@ -36,7 +43,7 @@ pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<Sd
     // return Err(());
 }
 
-pub unsafe fn event_loop(movie_state: &movie_state::MovieState, subsystem: &mut SdlSubsystemCtx, tx: std::sync::mpsc::Sender<String>, rotate_filter: &crate::filter::RotateFilter) {
+pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &mut SdlSubsystemCtx, tx: std::sync::mpsc::Sender<String>) {
 
     subsystem.canvas.set_draw_color(Color::RGB(0, 255, 255));
     subsystem.canvas.clear();
@@ -44,11 +51,22 @@ pub unsafe fn event_loop(movie_state: &movie_state::MovieState, subsystem: &mut 
     // unsafe {let mut renderer = sdl2::sys::SDL_CreateRenderer(window.raw(), -1, 0); }
     let texture_creator = subsystem.canvas.texture_creator();
  
+    let textw: u32;
+    let texth: u32;
+    {
+        let codec_context = unsafe {movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap()};
+        textw = codec_context.width as u32;
+        texth = codec_context.height as u32;
+    }
+    // let mut lock = unsafe{movie_state.video_ctx.try_lock()};
+    // if let (textw: u32, texth: u32) = unsafe{movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap()} {
+    //     (codec_context.width as u32, codec_context.height as u32)
+    // }
     let mut texture: Texture = texture_creator.create_texture(
-        Some(PixelFormatEnum::ARGB32),
+        Some(PixelFormatEnum::IYUV),
         TextureAccess::Streaming,
-        subsystem.canvas.window().size().0,
-        subsystem.canvas.window().size().1,
+        textw,
+        texth
     ).unwrap();
 
     let mut event_pump = subsystem.sdl_ctx.event_pump().unwrap();
@@ -116,21 +134,38 @@ pub unsafe fn event_loop(movie_state: &movie_state::MovieState, subsystem: &mut 
                     // println!("av_gettime_relative: {}", (ffi::av_gettime_relative() - last_clock ) as f64 / 100_000. );
                 if delay > 0. {
                     println!("pts: {}", delay );
+
                     // println!("delay 2: {}", delay );
                     ::std::thread::sleep(Duration::from_secs_f64(1. / delay));
                 }
             }
+
             if let Some(frame) = movie_state.dequeue_frame() {
                 let dest_frame =
                     ffi::av_frame_alloc().as_mut()
                     .expect("failed to allocated memory for AVFrame");
 
+           
+                if movie_state.in_vfilter.is_null() || movie_state.out_vfilter.is_null() {
+                    let format_context = std::sync::Arc::clone(&movie_state.format_context);
+                    let rotation = super::get_orientation_metadata_value((*format_context).lock().unwrap().ptr);
+                    crate::filter::init_filter(
+                        rotation,
+                        &mut movie_state.vgraph,
+                        &mut movie_state.out_vfilter,
+                        &mut movie_state.in_vfilter,
+                        (frame.ptr.as_ref().unwrap().width, frame.ptr.as_ref().unwrap().height),
+                        frame.ptr.as_ref().unwrap().format,
+                    );
+                }
+                ffi::av_buffersrc_add_frame(movie_state.in_vfilter, frame.ptr);
+                ffi::av_buffersink_get_frame_flags(movie_state.out_vfilter, dest_frame, 0);
+
+
                 blit_frame(
-                    frame.ptr.as_mut().unwrap(),
                     dest_frame,
                     &mut subsystem.canvas,
                     &mut texture,
-                    rotate_filter,
                     ).unwrap_or_default();
 
 
@@ -145,65 +180,28 @@ pub unsafe fn event_loop(movie_state: &movie_state::MovieState, subsystem: &mut 
     }
 }
 fn blit_frame(
-    src_frame: &mut ffi::AVFrame,
     dest_frame: &mut ffi::AVFrame,
     canvas: &mut Canvas<Window>,
     texture: &mut Texture,
-    filter: &crate::filter::RotateFilter,
 ) -> Result<(), String> {
 
-        let  new_frame = frame_thru_filter(filter, src_frame);
-        // let new_frame = src_frame;
-
-        dest_frame.width  = canvas.window().size().0 as i32;
-        dest_frame.height = canvas.window().size().1 as i32;
-        dest_frame.format = AVPixelFormat_AV_PIX_FMT_ARGB;
-
-        unsafe {
-            let sws_ctx = ffi::sws_getCachedContext(
-                ::std::ptr::null_mut(),
-                new_frame.width,
-                new_frame.height,
-                ffi::AVPixelFormat_AV_PIX_FMT_YUV420P,
-                dest_frame.width,
-                dest_frame.height,
-                AVPixelFormat_AV_PIX_FMT_ARGB,
-                ffi::SWS_BILINEAR as i32,
-                ::std::ptr::null_mut(),
-                ::std::ptr::null_mut(),
-                ::std::ptr::null_mut(),
-            );
-
-
-            ffi::av_frame_get_buffer(dest_frame, 0);
-            ffi::sws_scale(
-                sws_ctx,
-                new_frame.data.as_ptr() as _,
-                new_frame.linesize.as_ptr(),
-                0,
-                new_frame.height,
-                dest_frame.data.as_mut_ptr(),
-                dest_frame.linesize.as_mut_ptr()
-            )
-        };
-
     // let new_frame = dest_frame;
-    unsafe { SDL_UpdateTexture(
-        texture.raw(), std::ptr::null(),
-        (*dest_frame).data[0] as _, (*dest_frame).linesize[0] as _
-    ) };
+    // unsafe { SDL_UpdateTexture(
+    //     texture.raw(), std::ptr::null(),
+    //     (*dest_frame).data[0] as _, (*dest_frame).linesize[0] as _
+    // ) };
     // unsafe { SDL_UpdateTexture(
     //     texture.raw(), std::ptr::null(),
     //     (new_frame).data[0] as _, (new_frame).linesize[0] as _
     // ) };
 
     // SDL cannot handle YUV(J)420P
-    // unsafe { SDL_UpdateYUVTexture(
-    //     texture.raw(), ptr::null(),
-    //     dest_frame.data[0], dest_frame.linesize[0],
-    //     dest_frame.data[1], dest_frame.linesize[1],
-    //     dest_frame.data[2], dest_frame.linesize[2],
-    // ) };
+    unsafe { SDL_UpdateYUVTexture(
+        texture.raw(), ::std::ptr::null(),
+        dest_frame.data[0], dest_frame.linesize[0],
+        dest_frame.data[1], dest_frame.linesize[1],
+        dest_frame.data[2], dest_frame.linesize[2],
+    ) };
     canvas.copy(texture, None, None).unwrap();
     Ok(())
 }
