@@ -400,11 +400,19 @@ unsafe impl Send for Storage<'_>{}
     });
 
 
-    let mut subsystem = platform::init_subsystem(window_width, window_height).unwrap();
+    let mut subsystem = match platform::init_subsystem(window_width, window_height) {
+        Ok(s) => s,
+        Err(e) => {
+            unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
+            keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+            decode_thread.join().unwrap();
+            packet_thread.join().unwrap();
+            return;
+        }
+    };
     platform::event_loop(&mut movie_state, &mut subsystem, tx);
 
     unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
-
     keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
     decode_thread.join().unwrap();
     packet_thread.join().unwrap();

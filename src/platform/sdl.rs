@@ -1,10 +1,11 @@
 
-use std::time::Duration;
+use std::{borrow::Borrow, sync::mpsc::Sender, thread::JoinHandle, time::Duration};
 
 use rusty_ffmpeg::ffi::{self};
 
 use sdl2::{
     event::Event,
+    Error,
     keyboard::Keycode,
     pixels::{Color, PixelFormatEnum},
     render::{Canvas, Texture, TextureAccess},
@@ -13,17 +14,24 @@ use sdl2::{
     Sdl
 };
 
-use crate::movie_state;
+use crate::{movie_state::{self, FrameWrapper}, record_state::{FrameWrapper as RecordFrameWrapper, RecordState}};
 
 // static CANVAS: Option<Canvas<Window>> = None;
 pub struct SdlSubsystemCtx {
     sdl_ctx: Sdl,
     canvas: Canvas<Window>,
+    is_recording: bool,
 }
 
-pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<SdlSubsystemCtx, ()> {
+pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<SdlSubsystemCtx, Error> {
     let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
+    let video_subsystem = match sdl_context.video() {
+        Ok(video_subsystem) => video_subsystem,
+        Err(err) => {
+            eprintln!("Error: {}", err);
+            return Err(Error::UnsupportedError);
+        }
+    };
 
     let window = video_subsystem.window("rs-player-ffmpeg-sdl2", default_width, default_height)
         .resizable()
@@ -35,7 +43,7 @@ pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<Sd
         .build()
         .unwrap();
 
-        let sdl_ctx = SdlSubsystemCtx{sdl_ctx: sdl_context, canvas: canvas};
+        let sdl_ctx = SdlSubsystemCtx{sdl_ctx: sdl_context, canvas: canvas, is_recording: false};
         return Ok(sdl_ctx);
 
     // unsafe {
@@ -74,6 +82,10 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
     let mut last_pts = 0;
     let mut last_clock = ffi::av_gettime_relative();
     let clock = ffi::av_gettime();
+    let mut record_tx: Option<Sender<RecordFrameWrapper>> = None;
+    let mut record_thread: JoinHandle<()>;
+
+    let mut the_record_state = RecordState::new();
 
     let fmt_ctx = movie_state.format_context.lock().unwrap().ptr;
     let frame_rate: ffi::AVRational = ffi::av_guess_frame_rate(
@@ -98,7 +110,22 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
                     // pause_packets.store(!pause_packets.load(std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
                     // packet_thread.thread().unpark();
                 },
-
+                Event::KeyDown { keycode: Some(Keycode::R), .. } => {
+                    match subsystem.is_recording {
+                        true => {
+                            tx.send("Stop recording".to_string()).unwrap();
+                            record_tx = None;
+                            // drop(record_tx)
+                            // if let Some(inner_tx) = record_tx.borrow() {
+                            // }
+                        },
+                        false => {
+                            tx.send("Start recording".to_string()).unwrap();
+                            record_tx = the_record_state.start_recording_thread();
+                        }
+                    }
+                    subsystem.is_recording = !subsystem.is_recording;
+                },
                 _ => {}
             }
         }
@@ -169,6 +196,7 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
                     ).unwrap_or_default();
 
 
+        record_frame(dest_frame, &record_tx);
                 // let codec_context = unsafe{codec_context.as_ref().unwrap()};
                 // last_pts = ffi::av_rescale_q(frame.ptr.as_ref().unwrap().pts, time_base, ffi::AVRational { num: 1, den: 1 });
                 last_pts = frame.ptr.as_ref().unwrap().best_effort_timestamp;
@@ -179,6 +207,19 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
         std::thread::yield_now();
     }
 }
+
+fn record_frame(
+    frame: &mut ffi::AVFrame,
+    tx: &Option<std::sync::mpsc::Sender<RecordFrameWrapper>>,
+) -> Result<(), String> {
+
+    let wrapped_frame = RecordFrameWrapper { ptr: frame as _ };
+    if tx.is_some()  {
+        _ = tx.as_ref().unwrap().send(wrapped_frame);
+    }
+    Ok(())
+}
+
 fn blit_frame(
     dest_frame: &mut ffi::AVFrame,
     canvas: &mut Canvas<Window>,
