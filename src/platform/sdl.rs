@@ -196,7 +196,7 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
                     ).unwrap_or_default();
 
 
-        record_frame(dest_frame, &record_tx);
+        let _ = record_frame(dest_frame, &record_tx);
                 // let codec_context = unsafe{codec_context.as_ref().unwrap()};
                 // last_pts = ffi::av_rescale_q(frame.ptr.as_ref().unwrap().pts, time_base, ffi::AVRational { num: 1, den: 1 });
                 last_pts = frame.ptr.as_ref().unwrap().best_effort_timestamp;
