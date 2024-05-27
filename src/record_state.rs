@@ -1,5 +1,5 @@
 #![allow(unused_variables, dead_code)]
-use std::{collections::VecDeque, io::Write, ops::Deref, sync::{mpsc::Sender, Arc, Mutex}, thread::JoinHandle};
+use std::{collections::VecDeque, io::Write, ops::Deref, sync::{mpsc::{Sender, SyncSender}, Arc, Mutex}, thread::JoinHandle};
 
 use rusty_ffmpeg::ffi::{self};
 pub struct RecordState {
@@ -46,15 +46,14 @@ impl RecordState {
         }
     }
 
-    pub unsafe fn start_recording_thread(&mut self) -> Option<Sender<FrameWrapper>> {
-        let (tx, rx) = std::sync::mpsc::channel::<FrameWrapper>();
+    pub unsafe fn start_recording_thread(&mut self) -> Option<SyncSender<FrameWrapper>> {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<FrameWrapper>(3);
 
         unsafe {
 
             let codec_name: std::ffi::CString = std::ffi::CString::new("libopenh264").unwrap();
             let codec = ffi::avcodec_find_encoder_by_name(codec_name.as_c_str().as_ptr());
-            eprintln!(" 🦀  codec: {:?}", codec);
-            let pkt = ffi::av_packet_alloc();
+            // let pkt = ffi::av_packet_alloc();
         
             let c = ffi::avcodec_alloc_context3(codec);
             /* put sample parameters */
@@ -69,9 +68,11 @@ impl RecordState {
             c.as_mut().unwrap().gop_size = 10;
             c.as_mut().unwrap().max_b_frames = 1;
             c.as_mut().unwrap().pix_fmt = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
-            c.as_mut().unwrap().profile = ffi::FF_PROFILE_H264_CONSTRAINED_BASELINE as _;
+            // c.as_mut().unwrap().profile = ffi::FF_PROFILE_H264_CONSTRAINED_BASELINE as _;
+            // c.as_mut().unwrap().profile = ffi::FF_PROFILE_H264_MAIN as _;
         
             let _ = ffi::avcodec_open2(c, codec, std::ptr::null_mut());
+            eprintln!("📽📽  opened codec: {:?}", codec);
             self.video_ctx = Arc::new(Mutex::new(CodecContextWrapper{
                 ptr:  c
             }));
@@ -81,6 +82,7 @@ impl RecordState {
         self.join_handle = Some(std::thread::spawn(move|| {
             let pkt = ffi::av_packet_alloc();
             let mut file_out = std::fs::File::create("output.mp4").expect("cannot open output.mp4");
+            eprintln!("📽📽  output file : output.mp4");
             while let Ok(msg) = rx.recv() {
                 unsafe {
                     // println!("📽📽  received frame: wxh {}x{}", msg.ptr.as_mut().unwrap().width, msg.ptr.as_mut().unwrap().height);
@@ -100,26 +102,20 @@ impl RecordState {
                         eprintln!("📽📽  write packet: {} (size={})", pkt.as_ref().unwrap().pts, pkt.as_ref().unwrap().size);
                         let _ =file_out.write(&buf);
                         // std::io::Write::write(pkt.data, 1, pkt.size, outfile);
-                        ffi::av_packet_unref(pkt);
+                        // ffi::av_packet_unref(pkt);
                     }
                 }
             }
             eprintln!("🦀🦀 stopping record thread: ");
+
+            if locked_video_ctx.lock().unwrap().ptr.as_ref().unwrap().codec_id == ffi::AVCodecID_AV_CODEC_ID_MPEG2VIDEO {
+                let endcode: [u8; 4 ] = [ 0, 0, 1, 0xb7 ];
+                let _ = file_out.write(&endcode);
+            }
             let _ = file_out.flush();
         }));
         Some(tx)
     }
-}
-
-pub fn start_recording_thread() -> (Option<Sender<String>>, JoinHandle<()>) {
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    let handle = std::thread::spawn(move|| {
-        while let Ok(msg) = rx.recv() {
-            println!("🦀🦀 received message: {}", msg);
-        }
-        eprintln!("🦀🦀 stopping record thread: ");
-    });
-    (Some(tx), handle)
 }
 
 pub struct FormatContextWrapper {

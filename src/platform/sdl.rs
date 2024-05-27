@@ -1,5 +1,5 @@
 
-use std::{borrow::Borrow, sync::mpsc::Sender, thread::JoinHandle, time::Duration};
+use std::{borrow::{Borrow, BorrowMut}, sync::mpsc::{Sender, SyncSender}, thread::JoinHandle, time::Duration};
 
 use rusty_ffmpeg::ffi::{self};
 
@@ -56,7 +56,7 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
     subsystem.canvas.set_draw_color(Color::RGB(0, 255, 255));
     subsystem.canvas.clear();
     subsystem.canvas.present();
-    // unsafe {let mut renderer = sdl2::sys::SDL_CreateRenderer(window.raw(), -1, 0); }
+    let mut renderer = sdl2::sys::SDL_CreateRenderer((*subsystem.canvas.window()).raw(), -1, 0);
     let texture_creator = subsystem.canvas.texture_creator();
  
     let textw: u32;
@@ -77,12 +77,15 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
         texth
     ).unwrap();
 
+    let ui_texture = texture_creator.create_texture(Some(PixelFormatEnum::IYUV), TextureAccess::Target, textw, texth).unwrap();
+    sdl2::sys::SDL_SetRenderTarget(renderer, ui_texture.raw());
+
     let mut event_pump = subsystem.sdl_ctx.event_pump().unwrap();
     let mut i = 0;
     let mut last_pts = 0;
     let mut last_clock = ffi::av_gettime_relative();
     let clock = ffi::av_gettime();
-    let mut record_tx: Option<Sender<RecordFrameWrapper>> = None;
+    let mut record_tx: Option<SyncSender<RecordFrameWrapper>> = None;
     let mut record_thread: JoinHandle<()>;
 
     let mut the_record_state = RecordState::new();
@@ -95,7 +98,8 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
     );
 
     'running: loop {
-        i = (i + 1) % 255;
+        // i = (i + 1) % 255;
+        i = i + 1;
         for event in event_pump.poll_iter() {
             // println!("event: {:?}", event);
             match event {
@@ -196,21 +200,99 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
                     ).unwrap_or_default();
 
 
-        let _ = record_frame(dest_frame, &record_tx);
                 // let codec_context = unsafe{codec_context.as_ref().unwrap()};
                 // last_pts = ffi::av_rescale_q(frame.ptr.as_ref().unwrap().pts, time_base, ffi::AVRational { num: 1, den: 1 });
                 last_pts = frame.ptr.as_ref().unwrap().best_effort_timestamp;
+                ffi::av_free(dest_frame.opaque);
             };
         }
         last_clock = ffi::av_gettime_relative();
         subsystem.canvas.present();
+//         // let surface = subsystem.canvas.window().surface(&event_pump).unwrap();
+//         // sdl2::sys::SDL_LockSurface(surface.raw());
+//         // let mut pixels: *mut std::os::raw::c_void = std::ptr::null_mut();
+//         // let pixel_ptr: *mut *mut i32 = &mut pixels;
+//         // let pixel_ptr: *mut *mut std::os::raw::c_void = &mut pixels;
+//         let pitch: *mut std::os::raw::c_int = std::ptr::null_mut();
+//         let mut pixels = std::ptr::null_mut();
+//         let mut pitch = 0;
+//         let ret = sdl2::sys::SDL_LockTexture(texture.raw(), std::ptr::null(), &mut pixels, &mut pitch);
+// let mut pixels_slice: Option<&mut [u8]> = None;
+//         if ret == 0 {
+//             let size = PixelFormatEnum::IYUV.byte_size_from_pitch_and_height(pitch as usize, 720);
+//             pixels_slice = Some(::std::slice::from_raw_parts_mut(pixels as *mut u8, size));
+//             // dbg!(&pixels_slice);
+//         }
+        // let yuvdata = std::ptr::slice_from_raw_parts(surface.raw().as_ref().unwrap().pixels, 1280 * 720);
+        // let yuvdata = surface.raw().as_ref().unwrap().pixels;
+        // let yuvdata = ui_texture;
+        // let pixelforjat = surface.pixel_format();
+        let dest_frame =
+            ffi::av_frame_alloc().as_mut()
+            .expect("failed to allocated memory for AVFrame");
+
+        dest_frame.width = 1280;
+        dest_frame.height = 720;
+        dest_frame.format = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
+        // let ret = ffi::av_image_alloc(&mut dest_frame.data as *mut _, &mut dest_frame.linesize as *mut _, dest_frame.width, dest_frame.height, dest_frame.format, 16);
+        // let ret = ffi::av_image_alloc(&mut dest_frame.data[1], &mut dest_frame.linesize[1], dest_frame.width, dest_frame.height, dest_frame.format, 16);
+        // let ret = ffi::av_image_alloc(&mut dest_frame.data[2], &mut dest_frame.linesize[2], dest_frame.width, dest_frame.height, dest_frame.format, 16);
+        let ret = ffi::av_frame_get_buffer(dest_frame, 16);
+
+        // let yuvslice: [*mut u8; 8] = yuvdata as _;
+        // let yuvdata = yuvdata as *const u32;
+        // let yuvslice = std::slice::from_raw_parts(yuvdata, 720 * 1280)k
+        // dest_frame.data[0] = 1 as *mut u8;
+        // dest_frame.data[1] = 128 as *mut u8;
+        // dest_frame.data[2] = 128 as *mut u8;
+        // let fill_ret = ffi::av_image_fill_arrays(
+        //     dest_frame.data.as_mut_ptr(),
+        //     dest_frame.linesize.as_mut_ptr(),
+        //     pixels as _,
+        //     dest_frame.format,
+        //     1280,
+        //     720,
+        //     16
+        // );
+        // // dest_frame.buf[0].as_mut().unwrap().data = pixels as _;
+        // eprintln!("fill_ret: {}", fill_ret);
+
+        if subsystem.is_recording {
+        dest_frame.pts = i;
+        /* Y */
+        let mut ybuff = vec![0u8; (dest_frame.linesize[0] as i32 * dest_frame.height) as usize];
+        for y in 0 .. dest_frame.height as usize {
+            for x in 0 .. dest_frame.width as usize {
+                ybuff[(y * (dest_frame.linesize[0] as usize) + x) as usize] = ((x + y + i as usize) * 3) as u8;
+            }
+        }
+        // dest_frame.data[0] = ::std::ptr::addr_of_mut!(ybuff) as _;
+        dest_frame.data[0] = (ybuff).as_mut_ptr() as *mut _;
+ 
+        /* Cb and Cr */
+        let mut cbbuff = vec![0; (dest_frame.linesize[1] as i32 * dest_frame.height/2) as usize];
+        let mut crbuff = vec![0; (dest_frame.linesize[2] as i32 * dest_frame.height/2) as usize];
+        for y in 0 .. (dest_frame.height/2) as usize {
+            for x in 0 .. (dest_frame.width/2) as usize {
+                cbbuff[(y * dest_frame.linesize[1] as usize + x) as usize] = ((128 + y + i as usize) * 2) as u8;
+                crbuff[(y * dest_frame.linesize[2] as usize + x) as usize] = (64 + x) as u8;
+            }
+        }
+        dest_frame.data[1] = cbbuff.as_mut_ptr() as *mut _;
+        dest_frame.data[2] = ::std::ptr::addr_of_mut!(*crbuff) as *mut _;
+        dest_frame.colorspace = ffi::AVColorSpace_AVCOL_SPC_BT709;
+
+        // dest_frame.data[1] = yuvdata.as_ref().unwrap()[1];
+        // dest_frame.data[2] = yuvdata.as_ref().unwrap()[2];
+        let _ = record_frame(dest_frame, &record_tx);
+        }
         std::thread::yield_now();
     }
 }
 
 fn record_frame(
     frame: &mut ffi::AVFrame,
-    tx: &Option<std::sync::mpsc::Sender<RecordFrameWrapper>>,
+    tx: &Option<std::sync::mpsc::SyncSender<RecordFrameWrapper>>,
 ) -> Result<(), String> {
 
     let wrapped_frame = RecordFrameWrapper { ptr: frame as _ };
