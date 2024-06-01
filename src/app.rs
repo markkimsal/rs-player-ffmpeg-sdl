@@ -261,15 +261,15 @@ unsafe impl Send for Storage<'_>{}
     //     codec_context.pix_fmt
     // );
 
-    // let (window_width, window_height): (u32, u32) = match rotation {
-    //     90 => (codec_context.height as u32 / 2, codec_context.width as u32 / 2),
-    //     _  => (codec_context.width as u32 / 2, codec_context.height as u32 / 2)
-    // };
     let (window_width, window_height): (u32, u32) = match rotation {
-         90 => (450, 800),
-        -90 => (450, 800),
-        _  => (800, 450)
+        90 => (codec_context.height as u32 , codec_context.width as u32 ),
+        _  => (codec_context.width as u32 , codec_context.height as u32 )
     };
+    // let (window_width, window_height): (u32, u32) = match rotation {
+    //      90 => (450, 800),
+    //     -90 => (450, 800),
+    //     _  => (800, 450)
+    // };
     // let frame = unsafe { ffi::av_frame_alloc().as_mut() }
     //     .expect("failed to allocated memory for AVFrame");
     // let packet = unsafe { ffi::av_packet_alloc().as_mut() }

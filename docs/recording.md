@@ -55,3 +55,17 @@ YUV info.  After copying the test-pattern generating code, that also didn't crea
 did.  So, without Codeium, I'm sure I would have repeated my earlier mistake of `addr_of_mut` instead of `as_mut_ptr()`.
 
 I think I should make an ffmpeg-lings.
+
+
+I Give Up
+===
+Okay, I lost a few days trying to get access to the GPU pixels via SDL, it does not seem possible.  So, I went the "slow" route;
+using `SDL_RenderReadPixels`.  This worked, but the video was all messed up.  After a day of chasing down alignment issues
+that weren't there, I realized the rendered screen was not the same size as the source video, nor the destination video.
+
+Fixing the size of the window to match the source video let me record a decent enough output, but there was some red artifacts
+at the bottom 5th of the video.  I spent a day trying to track that down, break points, memory hex dumps... I think something
+with SDL's YUV format and FFmpeg's YUV format are just not compatible.  Either that or the translation from rendered RGB back
+to YUV isn't quite right within `SDL_RenderReadPixels`.
+
+So, I'm going to commit what I have and move on to SDL3 and/or OpenGL/ES.

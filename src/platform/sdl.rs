@@ -1,7 +1,8 @@
 
-use std::{borrow::{Borrow, BorrowMut}, sync::mpsc::{Sender, SyncSender}, thread::JoinHandle, time::Duration};
+use std::{borrow::{Borrow, BorrowMut}, ffi::CString, io::Write, ops::Deref, ptr::{slice_from_raw_parts, slice_from_raw_parts_mut}, sync::mpsc::{Sender, SyncSender}, thread::JoinHandle, time::Duration};
 
-use rusty_ffmpeg::ffi::{self};
+use libc::suseconds_t;
+use rusty_ffmpeg::ffi::{self, av_frame_unref};
 
 use sdl2::{
     event::Event,
@@ -14,7 +15,7 @@ use sdl2::{
     Sdl
 };
 
-use crate::{movie_state::{self, FrameWrapper}, record_state::{FrameWrapper as RecordFrameWrapper, RecordState}};
+use crate::{movie_state::{self, FormatContextWrapper, FrameWrapper}, record_state::{FrameWrapper as RecordFrameWrapper, RecordState}};
 
 // static CANVAS: Option<Canvas<Window>> = None;
 pub struct SdlSubsystemCtx {
@@ -23,9 +24,10 @@ pub struct SdlSubsystemCtx {
     is_recording: bool,
 }
 
+struct AlignedBytes([u8; 3]);
 pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<SdlSubsystemCtx, Error> {
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = match sdl_context.video() {
+    let sdl_ctx = sdl2::init().unwrap();
+    let video_subsystem = match sdl_ctx.video() {
         Ok(video_subsystem) => video_subsystem,
         Err(err) => {
             eprintln!("Error: {}", err);
@@ -36,19 +38,20 @@ pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<Sd
     let window = video_subsystem.window("rs-player-ffmpeg-sdl2", default_width, default_height)
         .resizable()
         .position_centered()
+        .set_window_flags(sdl2::sys::SDL_SWSURFACE)
         .build()
         .unwrap();
     let canvas = window
         .into_canvas()
+        .software()
         .build()
         .unwrap();
 
-        let sdl_ctx = SdlSubsystemCtx{sdl_ctx: sdl_context, canvas: canvas, is_recording: false};
-        return Ok(sdl_ctx);
-
-    // unsafe {
-    // }
-    // return Err(());
+    Ok(SdlSubsystemCtx{
+        sdl_ctx,
+        canvas,
+        is_recording: false
+    })
 }
 
 pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &mut SdlSubsystemCtx, tx: std::sync::mpsc::Sender<String>) {
@@ -56,7 +59,6 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
     subsystem.canvas.set_draw_color(Color::RGB(0, 255, 255));
     subsystem.canvas.clear();
     subsystem.canvas.present();
-    let mut renderer = sdl2::sys::SDL_CreateRenderer((*subsystem.canvas.window()).raw(), -1, 0);
     let texture_creator = subsystem.canvas.texture_creator();
  
     let textw: u32;
@@ -76,9 +78,35 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
         textw,
         texth
     ).unwrap();
+    // let mut texture = subsystem.canvas.su;
+ 
+    // let mut texture: SDL_SW_YUVTexture = sdl2::sys::SDL_SW_CreateYUVTexture(PixelFormatEnum::IYUV, textw, texth).unwrap();
+    let _ = sdl2::video::drivers()
+        .map(|d: &'static str| {eprintln!("driver {}", d);});
+    dbg!(sdl2::video::drivers().len());
+    let mut iter = sdl2::video::drivers();
+    eprintln!("iter: {:?}", iter.next());
+    eprintln!("iter: {:?}", iter.next());
+    eprintln!("iter: {:?}", iter.next());
+    eprintln!("iter: {:?}", iter.next());
+    let info = subsystem.canvas.deref().info();
+    dbg!(&info);
 
-    let ui_texture = texture_creator.create_texture(Some(PixelFormatEnum::IYUV), TextureAccess::Target, textw, texth).unwrap();
-    sdl2::sys::SDL_SetRenderTarget(renderer, ui_texture.raw());
+    // let info = texture.query();
+    // dbg!(&info);
+    // let info = subsystem.canvas.info();
+    // dbg!(&info);
+
+    // let foo = texture.raw();
+    // let mut renderer = sdl2::sys::SDL_CreateRenderer(subsystem.canvas.window().raw(), 1, sdl2::sys::SDL_RendererFlags::SDL_RENDERER_SOFTWARE as _);
+    // if (renderer).is_null() {
+    //     eprintln!("Failed to create renderer");
+    //     let foo = sdl2::sys::SDL_GetError();
+    //     dbg!(&sdl2::sys::SDL_GetError());
+    //     return;
+    // }
+    // let ui_texture = texture_creator.create_texture(Some(PixelFormatEnum::IYUV), TextureAccess::Target, textw, texth).unwrap();
+    // sdl2::sys::SDL_SetRenderTarget(renderer, ui_texture.raw());
 
     let mut event_pump = subsystem.sdl_ctx.event_pump().unwrap();
     let mut i = 0;
@@ -137,6 +165,7 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
 
         if movie_state.is_paused() == true {
             std::thread::yield_now();
+            screen_cap(subsystem, &mut record_tx, i, &event_pump);
             continue;
         }
 
@@ -208,84 +237,8 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
         }
         last_clock = ffi::av_gettime_relative();
         subsystem.canvas.present();
-//         // let surface = subsystem.canvas.window().surface(&event_pump).unwrap();
-//         // sdl2::sys::SDL_LockSurface(surface.raw());
-//         // let mut pixels: *mut std::os::raw::c_void = std::ptr::null_mut();
-//         // let pixel_ptr: *mut *mut i32 = &mut pixels;
-//         // let pixel_ptr: *mut *mut std::os::raw::c_void = &mut pixels;
-//         let pitch: *mut std::os::raw::c_int = std::ptr::null_mut();
-//         let mut pixels = std::ptr::null_mut();
-//         let mut pitch = 0;
-//         let ret = sdl2::sys::SDL_LockTexture(texture.raw(), std::ptr::null(), &mut pixels, &mut pitch);
-// let mut pixels_slice: Option<&mut [u8]> = None;
-//         if ret == 0 {
-//             let size = PixelFormatEnum::IYUV.byte_size_from_pitch_and_height(pitch as usize, 720);
-//             pixels_slice = Some(::std::slice::from_raw_parts_mut(pixels as *mut u8, size));
-//             // dbg!(&pixels_slice);
-//         }
-        // let yuvdata = std::ptr::slice_from_raw_parts(surface.raw().as_ref().unwrap().pixels, 1280 * 720);
-        // let yuvdata = surface.raw().as_ref().unwrap().pixels;
-        // let yuvdata = ui_texture;
-        // let pixelforjat = surface.pixel_format();
-        let dest_frame =
-            ffi::av_frame_alloc().as_mut()
-            .expect("failed to allocated memory for AVFrame");
 
-        dest_frame.width = 1280;
-        dest_frame.height = 720;
-        dest_frame.format = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
-        // let ret = ffi::av_image_alloc(&mut dest_frame.data as *mut _, &mut dest_frame.linesize as *mut _, dest_frame.width, dest_frame.height, dest_frame.format, 16);
-        // let ret = ffi::av_image_alloc(&mut dest_frame.data[1], &mut dest_frame.linesize[1], dest_frame.width, dest_frame.height, dest_frame.format, 16);
-        // let ret = ffi::av_image_alloc(&mut dest_frame.data[2], &mut dest_frame.linesize[2], dest_frame.width, dest_frame.height, dest_frame.format, 16);
-        let ret = ffi::av_frame_get_buffer(dest_frame, 16);
-
-        // let yuvslice: [*mut u8; 8] = yuvdata as _;
-        // let yuvdata = yuvdata as *const u32;
-        // let yuvslice = std::slice::from_raw_parts(yuvdata, 720 * 1280)k
-        // dest_frame.data[0] = 1 as *mut u8;
-        // dest_frame.data[1] = 128 as *mut u8;
-        // dest_frame.data[2] = 128 as *mut u8;
-        // let fill_ret = ffi::av_image_fill_arrays(
-        //     dest_frame.data.as_mut_ptr(),
-        //     dest_frame.linesize.as_mut_ptr(),
-        //     pixels as _,
-        //     dest_frame.format,
-        //     1280,
-        //     720,
-        //     16
-        // );
-        // // dest_frame.buf[0].as_mut().unwrap().data = pixels as _;
-        // eprintln!("fill_ret: {}", fill_ret);
-
-        if subsystem.is_recording {
-        dest_frame.pts = i;
-        /* Y */
-        let mut ybuff = vec![0u8; (dest_frame.linesize[0] as i32 * dest_frame.height) as usize];
-        for y in 0 .. dest_frame.height as usize {
-            for x in 0 .. dest_frame.width as usize {
-                ybuff[(y * (dest_frame.linesize[0] as usize) + x) as usize] = ((x + y + i as usize) * 3) as u8;
-            }
-        }
-        // dest_frame.data[0] = ::std::ptr::addr_of_mut!(ybuff) as _;
-        dest_frame.data[0] = (ybuff).as_mut_ptr() as *mut _;
- 
-        /* Cb and Cr */
-        let mut cbbuff = vec![0; (dest_frame.linesize[1] as i32 * dest_frame.height/2) as usize];
-        let mut crbuff = vec![0; (dest_frame.linesize[2] as i32 * dest_frame.height/2) as usize];
-        for y in 0 .. (dest_frame.height/2) as usize {
-            for x in 0 .. (dest_frame.width/2) as usize {
-                cbbuff[(y * dest_frame.linesize[1] as usize + x) as usize] = ((128 + y + i as usize) * 2) as u8;
-                crbuff[(y * dest_frame.linesize[2] as usize + x) as usize] = (64 + x) as u8;
-            }
-        }
-        dest_frame.data[1] = cbbuff.as_mut_ptr() as *mut _;
-        dest_frame.data[2] = ::std::ptr::addr_of_mut!(*crbuff) as *mut _;
-        dest_frame.colorspace = ffi::AVColorSpace_AVCOL_SPC_BT709;
-
-        // dest_frame.data[1] = yuvdata.as_ref().unwrap()[1];
-        // dest_frame.data[2] = yuvdata.as_ref().unwrap()[2];
-        let _ = record_frame(dest_frame, &record_tx);
-        }
+        screen_cap(subsystem, &mut record_tx, i, &event_pump);
         std::thread::yield_now();
     }
 }
@@ -329,3 +282,175 @@ fn blit_frame(
     Ok(())
 }
 
+fn fill_frame_with_buffer(frame: &mut ffi::AVFrame, buffer: *const u8, len: usize, i: i64) {
+    unsafe {
+        let  bfslice: &[u8] = &*slice_from_raw_parts(buffer, len + 64);
+        let  offset0:usize = frame.linesize[0] as usize * frame.height as usize;
+        // let  offset1:usize = frame.linesize[0] as usize * frame.height as usize + frame.linesize[1] as usize * frame.height as usize / 2;
+        // let  offset2:usize = frame.linesize[0] as usize * frame.height as usize + (frame.linesize[1] as usize * frame.height as usize / 2 ) + (frame.linesize[2] as usize  * frame.height as usize / 2);
+
+        let  offset1:usize = offset0 + (frame.linesize[1] as usize * frame.height as usize / 2);
+        let  offset2:usize = offset1 + (frame.linesize[2] as usize * frame.height as usize / 2);
+
+        // frame.data[0] = bfslice[0 .. offset0].as_ptr() as *mut _;
+        // frame.data[1] = bfslice[offset0 .. offset1].as_ptr() as *mut _;
+        // frame.data[2] = bfslice[offset1 .. offset2].as_ptr() as *mut _;
+        let dslice: &mut [u8] = &mut *slice_from_raw_parts_mut(frame.buf[0].as_mut().unwrap().data as _, len);
+        // let crslice: &mut [u8] = &mut *slice_from_raw_parts_mut(frame.data[1], len / 2);
+        // let cyslice: &mut [u8] = &mut *slice_from_raw_parts_mut(frame.data[2], len / 2);
+        for y in 0 .. frame.height as usize {
+            for x in 0 .. frame.width as usize {
+                // dslice[(y * (frame.linesize[0] as usize) + x) as usize] = ((x + y + i as usize) * 3) as u8;
+                dslice[(y * (frame.linesize[0] as usize) + x) as usize] = (bfslice[(y * (frame.linesize[0] as usize) + x) as usize]) as u8;
+                // dslice[(y * (frame.linesize[0] as usize) + x) as usize] = 22 as u8;
+            }
+        }
+ 
+        for y in 0 .. (frame.height/2) as usize {
+            for x in 0 .. (frame.width/2) as usize {
+                dslice[offset0 + (y * frame.linesize[1] as usize + x) as usize] = bfslice[offset1  + (y * frame.linesize[1] as usize + x) as usize] as u8;
+                dslice[offset1 + (y * frame.linesize[2] as usize + x) as usize] = bfslice[offset1  + (y * frame.linesize[2] as usize + x) as usize] as u8;
+                // dslice[offset0 + (y * frame.linesize[2] as usize + x) as usize] = 22 as u8 ;
+                // dslice[offset1 + (y * frame.linesize[2] as usize + x) as usize] = 22 as u8 ;
+                // crslice[(y  + x) as usize] = 0 as u8;
+                // cyslice[(y  + x) as usize] = 0 as u8;
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn write_out_buffer(buffer: *const u8, len: usize) {
+
+    unsafe {
+        // buffer.iter().for_each(|b| println!("{:02x}", b));
+        let mut file_out = std::fs::File::create("test.yuv").expect("cannot open output.mp4");
+        let bfslice: &[u8] = &*slice_from_raw_parts(buffer, len);
+        file_out.write_all(bfslice as _).unwrap();
+        // file_out.write_all(buffer.into()).unwrap();
+        let _ = file_out.flush();
+    }
+}
+
+fn fill_frame_with_pattern(dest_frame: &mut ffi::AVFrame, i: i64) {
+        let mut ybuff = vec![0u8; (dest_frame.linesize[0] as i32 * dest_frame.height) as usize];
+        for y in 0 .. dest_frame.height as usize {
+            for x in 0 .. dest_frame.width as usize {
+                ybuff[(y * (dest_frame.linesize[0] as usize) + x) as usize] = ((x + y + i as usize) * 3) as u8;
+            }
+        }
+        // dest_frame.data[0] = ::std::ptr::addr_of_mut!(ybuff) as _;
+        dest_frame.data[0] = (ybuff).as_mut_ptr() as *mut _;
+ 
+        /* Cb and Cr */
+        let mut cbbuff = vec![0; (dest_frame.linesize[1] as i32 * dest_frame.height/2) as usize];
+        let mut crbuff = vec![0; (dest_frame.linesize[2] as i32 * dest_frame.height/2) as usize];
+        for y in 0 .. (dest_frame.height/2) as usize {
+            for x in 0 .. (dest_frame.width/2) as usize {
+                cbbuff[(y * dest_frame.linesize[1] as usize + x) as usize] = ((128 + y + i as usize) * 2) as u8;
+                crbuff[(y * dest_frame.linesize[2] as usize + x) as usize] = (64 + x) as u8;
+            }
+        }
+        dest_frame.data[1] = cbbuff.as_mut_ptr() as *mut _;
+        dest_frame.data[2] = ::std::ptr::addr_of_mut!(*crbuff) as *mut _;
+        dest_frame.colorspace = ffi::AVColorSpace_AVCOL_SPC_BT709;
+    }
+
+unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std::sync::mpsc::SyncSender<RecordFrameWrapper>>, i: i64, event_pump: &sdl2::EventPump) {
+    if subsystem.is_recording {
+    // let surface = subsystem.canvas.window().surface(&event_pump).unwrap();
+    // sdl2::sys::SDL_LockSurface(surface.raw());
+    // let mut pixels: *mut std::os::raw::c_void = std::ptr::null_mut();
+    // let pixel_ptr: *mut *mut i32 = &mut pixels;
+    // let pixel_ptr: *mut *mut std::os::raw::c_void = &mut pixels;
+    // let pixels = std::ptr::null_mut();
+    let dest_frame =
+        ffi::av_frame_alloc().as_mut()
+        .expect("failed to allocated memory for AVFrame");
+
+    dest_frame.width = 1280;
+    dest_frame.height = 720;
+    dest_frame.format = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
+    // let ret = ffi::av_image_alloc(&mut dest_frame.data as *mut _, &mut dest_frame.linesize as *mut _, dest_frame.width, dest_frame.height, dest_frame.format, 16);
+    // let ret = ffi::av_image_alloc(&mut dest_frame.data[1], &mut dest_frame.linesize[1], dest_frame.width, dest_frame.height, dest_frame.format, 16);
+    // let ret = ffi::av_image_alloc(&mut dest_frame.data[2], &mut dest_frame.linesize[2], dest_frame.width, dest_frame.height, dest_frame.format, 16);
+    let ret = ffi::av_frame_get_buffer(dest_frame, 0);
+
+    dest_frame.pts = i;
+    /* Y */
+    // let u_pixel_ptr = (pixels) as *mut u8;
+    // dest_frame.data[0] = u_pixel_ptr;
+    // dest_frame.data[1] = (u_pixel_ptr as *mut u8);
+    // dest_frame.data[0] = pixels as *mut u8;
+    // dest_frame.data[1] = ::std::ptr::null_mut();
+    // dest_frame.data[2] = ::std::ptr::null_mut();
+    // let n_units = ffi::av_image_get_buffer_size(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P, 1280, 720, 16);
+    let n_units = dest_frame.buf[0].as_mut().unwrap().size;
+    dbg!(n_units);
+    // let mut aligned: Vec<AlignedBytes> = Vec::with_capacity(n_units as _);
+    let mut aligned: Vec<u8> = Vec::with_capacity(n_units as _);
+    let aligned = aligned.as_mut_slice();
+
+    // let srf = sdl2::sys::SDL_CreateRGBSurface(0, 1280, 720, 24, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
+    let srf = subsystem.canvas.window().surface(event_pump).unwrap();
+    let mut pitch: usize = srf.pixel_format().raw().as_mut().unwrap().BytesPerPixel as usize;
+    pitch *= srf.width() as usize;
+    dbg!(pitch);
+    // let pitch = (1280 * sdl2::pixels::SDL_BYTESPERPIXEL(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P) as _);
+    let ret = sdl2::sys::SDL_RenderReadPixels(
+        subsystem.canvas.raw() as *mut _,
+        std::ptr::null(),
+        sdl2::sys::SDL_PixelFormatEnum::SDL_PIXELFORMAT_IYUV as _,
+        // (dest_frame.buf[0].as_mut().unwrap().buffer) as _,
+        aligned.as_mut_ptr() as *mut _,
+        // srf.as_mut().unwrap().pixels as *mut _,
+        // srf.as_mut().unwrap().pitch as _,
+        // dest_frame.data[0] as *mut _,
+        // pitch as _,
+        1280,
+        // 640 * 3 / 2,
+        // 1280 * 3,
+        // subsystem.canvas.window().surface(&event_pump).unwrap().pitch() as _,
+        // 1280 *  3,
+    );
+
+    // write_out_buffer(aligned.as_ptr(), n_units as _);
+    // dbg!(aligned.get(0));
+    // let path = CString::new("test.bmp").unwrap();
+    // let mode = CString::new("rw").unwrap();
+    // let dst = sdl2::sys::SDL_RWFromFile(path.as_ptr() as *const libc::c_char, mode.as_ptr() as *const _);
+    // if dst.is_null() {
+    //     panic!("failed to open test.bmp");
+    // }
+    // if sdl2::sys::SDL_SaveBMP_RW(srf.as_mut().unwrap(), dst, 1) != 0 {
+    //     panic!("failed to save test.bmp");
+    // }
+    // sdl2::sys::SDL_RWclose(dst);
+
+    // fill_frame_with_pattern(dest_frame, i);
+    fill_frame_with_buffer(dest_frame, aligned.as_ptr(), n_units as usize, i);
+    // dest_frame.data[0] = ::std::slice::from_raw_parts_mut(aligned.as_mut_ptr() as *mut u8, 1280 * 720 * 3 / 2);
+    // dest_frame.data[0] = aligned.as_mut_ptr() as *mut _;
+    // dest_frame.data[0] = (aligned).as_mut_ptr() as *mut _;
+    // dest_frame.data[0] = ::std::ptr::addr_of_mut!(aligned) as *mut u8;
+
+
+    // let dfbuf = dest_frame.buf[0].as_mut().unwrap();
+    // dest_frame.data[0] = ::std::ptr::addr_of!(aligned) as *mut u8;
+    // dest_frame.buf[0] = ::std::ptr::addr_of!(aligned) as *mut _;
+    // let x = aligned[0..1280];
+    // dest_frame.data[0] = ::std::slice::from_raw_parts(
+    //     ::std::ptr::addr_of_mut!(aligned) as *mut u8,
+    //     1280
+    // ) as *mut _;
+
+    // let buf = dest_frame.buf[0].as_mut().unwrap();
+    // buf.buffer = ::std::ptr::addr_of_mut!(*pixels) as _;
+    //  = (::std::ptr::addr_of_mut!(pixels) as *mut _);
+    // dest_frame.data[1] = yuvdata.as_ref().unwrap()[1];
+    // dest_frame.data[2] = yuvdata.as_ref().unwrap()[2];
+    let _ = record_frame(dest_frame, &record_tx);
+    // ::std::thread::sleep(Duration::from_secs_f64(0.15));
+    // av_frame_unref(dest_frame);
+    }
+}
