@@ -171,3 +171,46 @@ pub fn init_filter(
     }
     return ret;
 }
+
+
+pub unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) -> i32 {
+    let key_name = CString::new("rotate").unwrap();
+	let tag: *mut ffi::AVDictionaryEntry = ffi::av_dict_get(
+        (*format_ctx).metadata,
+        key_name.as_ptr() as *const _,
+        std::ptr::null(),
+        0
+    );
+	if !tag.is_null() {
+		return libc::atoi((*tag).value);
+	}
+    eprintln!(" 🔄 got no rotation tag.");
+    // let streams = NonNull::<ffi::AVStream>::new((*format_ctx).streams as *mut _).unwrap();
+    eprintln!(" 🔄 nb_streams ptr is {:?}", (*format_ctx).nb_streams);
+    let mut rotation = 0.;
+    for i in 0..(*format_ctx).nb_streams as usize {
+        unsafe {
+            let mut _ptr = std::ptr::NonNull::new((*format_ctx).streams as *mut _).unwrap();
+            let stream_ptr = ((*format_ctx).streams as *mut *mut ffi::AVStream).add(i);
+            // let s = Box::<ffi::AVStream>::from_raw(*_ptr.as_ptr());
+            let s = Box::<ffi::AVStream>::from_raw(*stream_ptr);
+            eprintln!(" 🔄 streams nb_side_data is {:?}",s.nb_side_data);
+            if !s.side_data.is_null() {
+                let _display_matrix = ffi::av_stream_get_side_data(
+                    Box::into_raw(s) as *const _,
+                    ffi::AVPacketSideDataType_AV_PKT_DATA_DISPLAYMATRIX,
+                    std::ptr::null_mut()
+                );
+                eprintln!(" 🔄 displaymatrix is {:?}", _display_matrix);
+                rotation = -ffi::av_display_rotation_get(_display_matrix as *const i32);
+                eprintln!(" 🔄 rotation is {:?}", rotation);
+            } else {
+                // consume the box
+                let unptr = Box::into_raw(s);
+                std::ptr::drop_in_place(unptr);
+            }
+            return rotation as i32;
+        }
+    }
+    0
+}

@@ -2,7 +2,6 @@
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::ptr;
-use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -11,25 +10,39 @@ use rusty_ffmpeg::ffi;
 use rusty_ffmpeg::ffi::AVFrame;
 use rusty_ffmpeg::ffi::av_frame_free;
 
+use crate::movie_state;
 use crate::movie_state::movie_state_enqueue_frame;
 use crate::movie_state::movie_state_enqueue_packet;
 use crate::movie_state::CodecContextWrapper;
 use crate::movie_state::MovieState;
 
-#[cfg_attr(target_os="linux", path="platform/sdl.rs")]
-mod platform;
+use crate::platform;
 
-// #[path="filter.rs"]
-// mod filter;
-// fn rotation_filter_init() -> crate::filter::RotateFilter {
-//     unsafe {
-//         crate::filter::RotateFilter {
-//             filter_graph: ffi::avfilter_graph_alloc(),
-//             buffersink_ctx: std::ptr::null_mut(),
-//             buffersrc_ctx:  std::ptr::null_mut(),
-//         }
-//     }
-// }
+#[repr(C)]
+pub struct RsPlayerContext {
+    pub init: fn(u32, u32) -> Result<platform::sdl::SdlSubsystemCtx, sdl2::Error>, 
+    // pub init: Sender<(u32, u32)>,
+    // pub init_rx: Receiver<Result<SdlSubsystemCtx, sdl2::Error>>,
+    // pub frame: fn(),
+    pub frame: unsafe fn (movie_state: &mut movie_state::MovieState, subsystem: &mut platform::sdl::SdlSubsystemCtx, tx: std::sync::mpsc::Sender<String>),
+    pub subsystem_ctx: Option<platform::sdl::SdlSubsystemCtx>,
+}
+
+impl RsPlayerContext {
+    pub fn new() -> Self {
+        Self {
+            init:  crate::platform::sdl::init_subsystem,
+            // frame: fn (movie_state: &mut movie_state::MovieState, subsystem: &mut SdlSubsystemCtx, tx: std::sync::mpsc::Sender<String>),
+            frame: platform::sdl::event_loop,
+            subsystem_ctx: None,
+        }
+    }
+
+    // pub fn run(&mut self) {
+    //     let _ = self.init.send((1280, 720));
+    //     self.subsystem_ctx = self.init_rx.recv().unwrap().unwrap();
+    // }
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn new_movie_state() -> *mut MovieState {
@@ -250,7 +263,7 @@ unsafe impl Send for Storage<'_>{}
     let mut movie_state = movie_state.as_mut().unwrap();
     let format_context = std::sync::Arc::clone(&movie_state.format_context);
     let codec_context = movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap();
-    let rotation = get_orientation_metadata_value((*format_context).lock().unwrap().ptr);
+    let rotation = crate::filter::get_orientation_metadata_value((*format_context).lock().unwrap().ptr);
     // let mut rotate_filter = rotation_filter_init();
     // crate::filter::init_filter(
     //     rotation,
@@ -400,7 +413,7 @@ unsafe impl Send for Storage<'_>{}
     });
 
 
-    let mut subsystem = match platform::init_subsystem(window_width, window_height) {
+    let mut subsystem = match platform::sdl::init_subsystem(window_width, window_height) {
         Ok(s) => s,
         Err(e) => {
             unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
@@ -410,7 +423,7 @@ unsafe impl Send for Storage<'_>{}
             return;
         }
     };
-    platform::event_loop(&mut movie_state, &mut subsystem, tx);
+    platform::sdl::event_loop(&mut movie_state, &mut subsystem, tx);
 
     unsafe { av_frame_free(&mut (dest_frame as *mut _)) };
     keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -464,6 +477,7 @@ fn decode_packet(
 }
 
 
+#[allow(dead_code)]
 fn frame_thru_filter(filter: &crate::filter::RotateFilter, frame: &mut AVFrame) -> AVFrame
 {
     let filt_frame =
@@ -497,44 +511,3 @@ fn frame_thru_filter(filter: &crate::filter::RotateFilter, frame: &mut AVFrame) 
 
 
 
-unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) -> i32 {
-    let key_name = CString::new("rotate").unwrap();
-	let tag: *mut ffi::AVDictionaryEntry = ffi::av_dict_get(
-        (*format_ctx).metadata,
-        key_name.as_ptr() as *const _,
-        std::ptr::null(),
-        0
-    );
-	if !tag.is_null() {
-		return libc::atoi((*tag).value);
-	}
-    eprintln!(" 🔄 got no rotation tag.");
-    // let streams = NonNull::<ffi::AVStream>::new((*format_ctx).streams as *mut _).unwrap();
-    eprintln!(" 🔄 nb_streams ptr is {:?}", (*format_ctx).nb_streams);
-    let mut rotation = 0.;
-    for i in 0..(*format_ctx).nb_streams as usize {
-        unsafe {
-            let mut _ptr = NonNull::new((*format_ctx).streams as *mut _).unwrap();
-            let stream_ptr = ((*format_ctx).streams as *mut *mut ffi::AVStream).add(i);
-            // let s = Box::<ffi::AVStream>::from_raw(*_ptr.as_ptr());
-            let s = Box::<ffi::AVStream>::from_raw(*stream_ptr);
-            eprintln!(" 🔄 streams nb_side_data is {:?}",s.nb_side_data);
-            if !s.side_data.is_null() {
-                let _display_matrix = ffi::av_stream_get_side_data(
-                    Box::into_raw(s) as *const _,
-                    ffi::AVPacketSideDataType_AV_PKT_DATA_DISPLAYMATRIX,
-                    std::ptr::null_mut()
-                );
-                eprintln!(" 🔄 displaymatrix is {:?}", _display_matrix);
-                rotation = -ffi::av_display_rotation_get(_display_matrix as *const i32);
-                eprintln!(" 🔄 rotation is {:?}", rotation);
-            } else {
-                // consume the box
-                let unptr = Box::into_raw(s);
-                std::ptr::drop_in_place(unptr);
-            }
-            return rotation as i32;
-        }
-    }
-    0
-}

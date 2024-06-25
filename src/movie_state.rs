@@ -2,6 +2,10 @@
 use std::{ops::Deref, sync::{Arc, Mutex}, collections::VecDeque};
 
 use rusty_ffmpeg::ffi::{self};
+// use crate::filter::get_orientation_metadata_value as gomv;
+
+use crate::filter;
+
 #[repr(C)]
 pub struct MovieState {
     pub format_context: Arc<Mutex<FormatContextWrapper>>,
@@ -60,6 +64,14 @@ impl MovieState {
             in_vfilter: std::ptr::null_mut(),
             out_vfilter: std::ptr::null_mut(),
             vgraph,
+        }
+    }
+
+    pub fn  get_orientation_metadata_value(&self) -> i32 {
+        unsafe {
+            let format_context = std::sync::Arc::clone(&self.format_context);
+            let rotation = filter::get_orientation_metadata_value((*format_context).lock().unwrap().ptr);
+            rotation
         }
     }
 }

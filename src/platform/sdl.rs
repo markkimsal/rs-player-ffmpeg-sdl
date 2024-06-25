@@ -1,8 +1,14 @@
+use rusty_ffmpeg::ffi;
 
-use std::{borrow::{Borrow, BorrowMut}, ffi::CString, io::Write, ops::Deref, ptr::{slice_from_raw_parts, slice_from_raw_parts_mut}, sync::mpsc::{Sender, SyncSender}, thread::JoinHandle, time::Duration};
+use std::{
+    io::Write,
+    ops::Deref,
+    ptr::{slice_from_raw_parts, slice_from_raw_parts_mut},
+    sync::mpsc::SyncSender,
+    thread::JoinHandle,
+    time::Duration
+};
 
-use libc::suseconds_t;
-use rusty_ffmpeg::ffi::{self, av_frame_unref};
 
 use sdl2::{
     event::Event,
@@ -14,8 +20,9 @@ use sdl2::{
     video::Window,
     Sdl
 };
-
-use crate::{movie_state::{self, FormatContextWrapper, FrameWrapper}, record_state::{FrameWrapper as RecordFrameWrapper, RecordState}};
+use crate::record_state::{FrameWrapper as RecordFrameWrapper, RecordState};
+use crate::filter;
+use crate::movie_state;
 
 // static CANVAS: Option<Canvas<Window>> = None;
 pub struct SdlSubsystemCtx {
@@ -207,9 +214,8 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
 
            
                 if movie_state.in_vfilter.is_null() || movie_state.out_vfilter.is_null() {
-                    let format_context = std::sync::Arc::clone(&movie_state.format_context);
-                    let rotation = super::get_orientation_metadata_value((*format_context).lock().unwrap().ptr);
-                    crate::filter::init_filter(
+                    let rotation = movie_state.get_orientation_metadata_value();
+                    filter::init_filter(
                         rotation,
                         &mut movie_state.vgraph,
                         &mut movie_state.out_vfilter,
