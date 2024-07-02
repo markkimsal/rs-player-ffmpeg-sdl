@@ -1,4 +1,5 @@
 #![allow(unused_variables)]
+use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::ptr;
@@ -14,6 +15,7 @@ use rusty_ffmpeg::ffi::av_frame_free;
 use crate::movie_state::movie_state_enqueue_frame;
 use crate::movie_state::movie_state_enqueue_packet;
 use crate::movie_state::CodecContextWrapper;
+use crate::movie_state::FrameWrapper;
 use crate::movie_state::MovieState;
 
 #[cfg_attr(target_os="linux", path="platform/sdl.rs")]
@@ -278,75 +280,23 @@ unsafe impl Send for Storage<'_>{}
         unsafe { ffi::av_frame_alloc().as_mut() }
         .expect("failed to allocated memory for AVFrame");
 
-    let frame = unsafe {ffi::av_frame_alloc().as_mut()}
-        .expect("failed to allocated memory for AVFrame");
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let arc_format_context = std::sync::Arc::clone(&movie_state.format_context);
     let arc_video_ctx = std::sync::Arc::clone(&movie_state.video_ctx);
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let keep_running2 = std::sync::Arc::clone(&keep_running);
-    let keep_running3 = std::sync::Arc::clone(&keep_running);
     let pause_packets = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let pause_packets2 = std::sync::Arc::clone(&pause_packets);
-    let pause_packets3 = std::sync::Arc::clone(&pause_packets);
-
-    let videoqueue = std::sync::Arc::clone(&movie_state.videoqueue);
-    let video_stream_idx = movie_state.video_stream_idx;
     std::thread::spawn(move|| {
         for msg in rx {
             println!("🦀🦀 received message: {}", msg);
         }
     });
-    let packet_thread = std::thread::spawn(move|| {
-        loop {
-            if !keep_running2.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
-            }
-        unsafe {
-            let packet = ffi::av_packet_alloc().as_mut()
-                .expect("failed to allocated memory for AVPacket");
-            let response = ffi::av_read_frame((*(arc_format_context.lock().unwrap())).ptr, packet);
-            // if response == ffi::AVERROR(ffi::EAGAIN) || response == ffi::AVERROR_EOF {
-            if response == ffi::AVERROR_EOF {
-                println!("{}", String::from(
-                    "EOF",
-                ));
-                // *keep_running2.get_mut() = false;
-                keep_running2.store(false, std::sync::atomic::Ordering::Relaxed);
-                return;
-                // break 'running;
-            }
-
-            if response < 0 {
-                println!("{}", String::from(
-                    "ERROR",
-                ));
-                // *keep_running2.get_mut() = false;
-                keep_running2.store(false, std::sync::atomic::Ordering::Relaxed);
-                return;
-                // break 'running;
-            }
-            {
-                if video_stream_idx == packet.stream_index as i64 {
-                    while let Err(_) = movie_state_enqueue_packet(&videoqueue, packet) {
-                        // ::std::thread::sleep(Duration::from_millis(4));
-                        ::std::thread::yield_now();
-                        if !keep_running2.load(std::sync::atomic::Ordering::Relaxed) {
-                            break;
-                        }
-                    }
-                    // ::std::thread::sleep(Duration::from_millis(33));
-                } else {
-                    ffi::av_packet_unref(packet);
-                }
-            }
-            if pause_packets2.load(std::sync::atomic::Ordering::Relaxed) {
-                ::std::thread::park();
-            }
-            ::std::thread::yield_now();
-        }
-        };
-    });
+    let packet_thread = packet_thread_spawner(
+        arc_format_context,
+        std::sync::Arc::clone(&pause_packets),
+        std::sync::Arc::clone(&keep_running),
+        movie_state.video_stream_idx,
+        std::sync::Arc::clone(&movie_state.videoqueue),
+    );
 
     let i = 0;
     let last_pts = 0;
@@ -354,15 +304,16 @@ unsafe impl Send for Storage<'_>{}
     // let videoqueue =  movie_state.videoqueue.clone();
     // let video_ctx =  movie_state.video_ctx.clone();
     // let picq =  movie_state.picq.clone();
-    let videoqueue = std::sync::Arc::clone(&movie_state.videoqueue);
-    let picq       = std::sync::Arc::clone(&movie_state.picq);
-    let video_ctx  = std::sync::Arc::clone(&movie_state.video_ctx);
-    let decode_thread = std::thread::spawn(move || {
+    let videoqueue     = std::sync::Arc::clone(&movie_state.videoqueue);
+    let picq           = std::sync::Arc::clone(&movie_state.picq);
+    let video_ctx      = std::sync::Arc::clone(&movie_state.video_ctx);
+    let pause_packets3 = std::sync::Arc::clone(&pause_packets);
+    let keep_running3  = std::sync::Arc::clone(&keep_running);
+    let decode_thread  = std::thread::spawn(move || {
+    let frame = ffi::av_frame_alloc().as_mut()
+        .expect("failed to allocated memory for AVFrame");
         loop {
         unsafe {
-
-            let frame = ffi::av_frame_alloc().as_mut()
-                .expect("failed to allocated memory for AVFrame");
             let mut locked_videoqueue = videoqueue.lock().unwrap();
             if let Some(packet) = locked_videoqueue.front_mut() {
                 // !Note that AVPacket.pts is in AVStream.time_base units, not AVCodecContext.time_base units.
@@ -503,4 +454,63 @@ unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) 
         }
     }
     0
+}
+
+fn packet_thread_spawner(
+    arc_format_context: std::sync::Arc<std::sync::Mutex<crate::movie_state::FormatContextWrapper>>,
+    pause_packets: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    keep_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    video_stream_idx: i64,
+    videoqueue: std::sync::Arc<std::sync::Mutex<VecDeque<crate::movie_state::PacketWrapper>>>
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move|| {
+        loop {
+            if !keep_running.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+        unsafe {
+            let packet = ffi::av_packet_alloc().as_mut()
+                .expect("failed to allocated memory for AVPacket");
+            let response = ffi::av_read_frame((*(arc_format_context.lock().unwrap())).ptr, packet);
+            // if response == ffi::AVERROR(ffi::EAGAIN) || response == ffi::AVERROR_EOF {
+            if response == ffi::AVERROR_EOF {
+                println!("{}", String::from(
+                    "EOF",
+                ));
+                // *keep_running2.get_mut() = false;
+                keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                return;
+                // break 'running;
+            }
+
+            if response < 0 {
+                println!("{}", String::from(
+                    "ERROR",
+                ));
+                // *keep_running2.get_mut() = false;
+                keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                return;
+                // break 'running;
+            }
+            {
+                if video_stream_idx == packet.stream_index as i64 {
+                    while let Err(_) = movie_state_enqueue_packet(&videoqueue, packet) {
+                        // ::std::thread::sleep(Duration::from_millis(4));
+                        ::std::thread::yield_now();
+                        if !keep_running.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                    }
+                    // ::std::thread::sleep(Duration::from_millis(33));
+                } else {
+                    ffi::av_packet_unref(packet);
+                }
+            }
+            if pause_packets.load(std::sync::atomic::Ordering::Relaxed) {
+                ::std::thread::park();
+            }
+            ::std::thread::yield_now();
+        }
+        };
+    })
 }
