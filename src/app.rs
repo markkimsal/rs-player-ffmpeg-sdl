@@ -463,40 +463,6 @@ fn decode_packet(
     Ok(())
 }
 
-
-fn frame_thru_filter(filter: &crate::filter::RotateFilter, frame: &mut AVFrame) -> AVFrame
-{
-    let filt_frame =
-        unsafe { ffi::av_frame_alloc().as_mut() }
-        .expect("failed to allocated memory for AVFrame");
-
-    filt_frame.width  = frame.width;
-    filt_frame.height = frame.height;
-    filt_frame.format = frame.format;
-    unsafe { ffi::av_frame_get_buffer(filt_frame, 0) };
-
-	let result = unsafe { ffi::av_buffersrc_add_frame(filter.buffersrc_ctx, frame) };
-    if result < 0 {
-        if result == ffi::AVERROR_INVALIDDATA {
-            eprintln!("Invalid data while feeding the filtergraph.");
-        }
-        eprintln!("{}", ffi::av_err2str(result));
-        return *filt_frame;
-    }
-
-    loop {
-        unsafe {
-            let result =  ffi::av_buffersink_get_frame(filter.buffersink_ctx, filt_frame);
-            // if result == ffi::AVERROR(ffi::EOF)  { break; }
-            if result != ffi::AVERROR(ffi::EAGAIN)  { break; }
-        }
-    }
-
-	return *filt_frame;
-}
-
-
-
 unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) -> i32 {
     let key_name = CString::new("rotate").unwrap();
 	let tag: *mut ffi::AVDictionaryEntry = ffi::av_dict_get(
