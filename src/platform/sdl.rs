@@ -1,7 +1,6 @@
 
-use std::{borrow::{Borrow, BorrowMut}, ffi::CString, io::Write, ops::Deref, ptr::{slice_from_raw_parts, slice_from_raw_parts_mut}, sync::mpsc::{Sender, SyncSender}, thread::JoinHandle, time::Duration};
+use std::{io::Write, ops::Deref, ptr::{slice_from_raw_parts, slice_from_raw_parts_mut}, sync::mpsc::{Sender, SyncSender}, thread::JoinHandle, time::Duration};
 
-use libc::suseconds_t;
 use rusty_ffmpeg::ffi::{self, av_frame_unref};
 
 use sdl2::{
@@ -54,7 +53,7 @@ pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<Sd
     })
 }
 
-pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &mut SdlSubsystemCtx, tx: std::sync::mpsc::Sender<String>) {
+pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieState>, subsystem: &mut SdlSubsystemCtx, tx: std::sync::mpsc::Sender<String>) {
 
     subsystem.canvas.set_draw_color(Color::RGB(0, 255, 255));
     subsystem.canvas.clear();
@@ -205,21 +204,24 @@ pub unsafe fn event_loop(movie_state: &mut movie_state::MovieState, subsystem: &
                     ffi::av_frame_alloc().as_mut()
                     .expect("failed to allocated memory for AVFrame");
 
+                let mut in_vfilter = movie_state.in_vfilter.lock().unwrap();
+                let mut out_vfilter = movie_state.out_vfilter.lock().unwrap();
+                let mut vgraph = movie_state.vgraph.lock().unwrap();
            
-                if movie_state.in_vfilter.is_null() || movie_state.out_vfilter.is_null() {
-                    let format_context = std::sync::Arc::clone(&movie_state.format_context);
+                if in_vfilter.is_null() || out_vfilter.is_null() {
+                    let format_context = &movie_state.format_context;
                     let rotation = super::get_orientation_metadata_value((*format_context).lock().unwrap().ptr);
                     crate::filter::init_filter(
                         rotation,
-                        &mut movie_state.vgraph,
-                        &mut movie_state.out_vfilter,
-                        &mut movie_state.in_vfilter,
+                        &mut vgraph.ptr,
+                        &mut out_vfilter.ptr,
+                        &mut in_vfilter.ptr,
                         (frame.ptr.as_ref().unwrap().width, frame.ptr.as_ref().unwrap().height),
                         frame.ptr.as_ref().unwrap().format,
                     );
                 }
-                ffi::av_buffersrc_add_frame(movie_state.in_vfilter, frame.ptr);
-                ffi::av_buffersink_get_frame_flags(movie_state.out_vfilter, dest_frame, 0);
+                ffi::av_buffersrc_add_frame(in_vfilter.ptr, frame.ptr);
+                ffi::av_buffersink_get_frame_flags(out_vfilter.ptr, dest_frame, 0);
 
 
                 blit_frame(
