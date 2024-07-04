@@ -1,5 +1,4 @@
 #![allow(unused_variables)]
-use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::ptr;
@@ -247,7 +246,7 @@ unsafe impl Send for Storage<'_>{}
 #[allow(improper_ctypes_definitions)]
  pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) {
 
-    let mut movie_state = movie_state.as_mut().unwrap();
+    let movie_state = movie_state.as_mut().unwrap();
     let format_context = &movie_state.format_context;
     let codec_context = movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap();
     let rotation = get_orientation_metadata_value((*format_context).lock().unwrap().ptr);
@@ -313,8 +312,9 @@ unsafe impl Send for Storage<'_>{}
     let keep_running3  = std::sync::Arc::clone(&keep_running);
     let movie_state2   = std::sync::Arc::clone(&movie_state_arc);
     let decode_thread  = std::thread::spawn(move || {
-    let frame = ffi::av_frame_alloc().as_mut()
-        .expect("failed to allocated memory for AVFrame");
+        let frame = ffi::av_frame_alloc()
+            .as_mut()
+            .expect("failed to allocated memory for AVFrame");
         loop {
         unsafe {
             let mut locked_videoqueue = movie_state2.videoqueue.lock().unwrap();
@@ -465,24 +465,34 @@ fn packet_thread_spawner(
     video_stream_idx: i64,
     movie_state: Arc<&mut MovieState>
 ) {
-    // std::thread::spawn(move|| {
-        loop {
-            if !keep_running.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
-            }
+    let do_loop = true;
+    loop {
+        if !keep_running.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
         unsafe {
             let packet = ffi::av_packet_alloc().as_mut()
                 .expect("failed to allocated memory for AVPacket");
-            let response = ffi::av_read_frame((*(movie_state.format_context.lock().unwrap())).ptr, packet);
+            let response = ffi::av_read_frame(movie_state.format_context.lock().unwrap().ptr, packet);
             // if response == ffi::AVERROR(ffi::EAGAIN) || response == ffi::AVERROR_EOF {
             if response == ffi::AVERROR_EOF {
                 println!("{}", String::from(
                     "EOF",
                 ));
-                // *keep_running2.get_mut() = false;
-                keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
-                return;
-                // break 'running;
+                if !do_loop {
+                    keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                }
+                let seek_ret = ffi::av_seek_frame(movie_state.format_context.lock().unwrap().ptr, movie_state.video_stream_idx as i32, 0, ffi::AVSEEK_FLAG_BACKWARD as i32);
+                if seek_ret < 0 {
+                    eprintln!("📽📽  failed to seek backwards: ");
+                    keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                }
+                eprintln!("rewind to {}",
+                    seek_ret
+                );
+                continue;
             }
 
             if response < 0 {
@@ -513,6 +523,5 @@ fn packet_thread_spawner(
             }
             ::std::thread::yield_now();
         }
-        };
-    // })
+    };
 }

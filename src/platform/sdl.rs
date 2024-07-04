@@ -1,4 +1,4 @@
-
+#![allow(unused_variables, dead_code, unused_imports)]
 use std::{io::Write, ops::Deref, ptr::{slice_from_raw_parts, slice_from_raw_parts_mut}, sync::mpsc::{Sender, SyncSender}, thread::JoinHandle, time::Duration};
 
 use rusty_ffmpeg::ffi::{self, av_frame_unref};
@@ -113,7 +113,6 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
     let mut last_clock = ffi::av_gettime_relative();
     let clock = ffi::av_gettime();
     let mut record_tx: Option<SyncSender<RecordFrameWrapper>> = None;
-    let mut record_thread: JoinHandle<()>;
 
     let mut the_record_state = RecordState::new();
 
@@ -146,9 +145,6 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
                         true => {
                             tx.send("Stop recording".to_string()).unwrap();
                             record_tx = None;
-                            // drop(record_tx)
-                            // if let Some(inner_tx) = record_tx.borrow() {
-                            // }
                         },
                         false => {
                             tx.send("Start recording".to_string()).unwrap();
@@ -373,6 +369,7 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     dest_frame.width = 1280;
     dest_frame.height = 720;
     dest_frame.format = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
+    dest_frame.time_base = ffi::AVRational { num: 1, den: 25 };
     // let ret = ffi::av_image_alloc(&mut dest_frame.data as *mut _, &mut dest_frame.linesize as *mut _, dest_frame.width, dest_frame.height, dest_frame.format, 16);
     // let ret = ffi::av_image_alloc(&mut dest_frame.data[1], &mut dest_frame.linesize[1], dest_frame.width, dest_frame.height, dest_frame.format, 16);
     // let ret = ffi::av_image_alloc(&mut dest_frame.data[2], &mut dest_frame.linesize[2], dest_frame.width, dest_frame.height, dest_frame.format, 16);
