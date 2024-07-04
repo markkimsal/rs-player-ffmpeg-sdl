@@ -1,5 +1,5 @@
 #![allow(unused_variables, dead_code)]
-use std::{borrow::BorrowMut, collections::VecDeque, ops::Deref, sync::{mpsc::SyncSender, Arc, Mutex}, thread::JoinHandle};
+use std::{collections::VecDeque, ops::Deref, sync::{mpsc::SyncSender, Arc, Mutex}, thread::JoinHandle};
 
 use rusty_ffmpeg::ffi::{self};
 pub struct RecordState {
@@ -10,7 +10,6 @@ pub struct RecordState {
     // pub audio_pkt: *const ffi::AVPacket,
     pub videoqueue: Arc<Mutex<VecDeque<PacketWrapper>>>,
     pub video_stream: Arc<Mutex<StreamWrapper>>,
-    // pub video_ctx: Arc<Mutex<CodecContextWrapper>>,
     pub picq: Arc<Mutex<VecDeque<FrameWrapper>>>,
     pub paused: std::sync::atomic::AtomicBool,
     pub join_handle: Option<JoinHandle<()>>,
@@ -44,7 +43,6 @@ impl RecordState {
             videoqueue: Arc::new(Mutex::new(VecDeque::with_capacity(10))),
             // audio_pkt: std::ptr::null_mut(),
             video_stream: Arc::new(Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()})),
-            // video_ctx: Arc::new(Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()})),
             picq: Arc::new(Mutex::new(VecDeque::with_capacity(3))),
             paused: std::sync::atomic::AtomicBool::new(false),
             join_handle: None,
@@ -79,14 +77,13 @@ impl RecordState {
         // }
         // let locked_video_ctx = self.video_ctx.clone(); // expect("someone else is using the encode context");
 
-        let locked_video_ctx = video_st.enc_ctx.clone();
         let locked_format_ctx = self.format_context.clone(); // expect("someone else is using the encode context");
         #[allow(unused_mut)]
         let mut pts = 0 as i64;
         self.join_handle = Some(std::thread::spawn(move|| {
             let pkt = ffi::av_packet_alloc().as_mut().unwrap();
             let locked_format_ctx = locked_format_ctx.lock().unwrap().ptr;
-            let locked_video_ctx = locked_video_ctx.lock().unwrap().ptr;
+            let video_st = video_st;
             // let mut file_out = std::fs::File::create("output.mp4").expect("cannot open output.mp4");
             ffi::avio_open(&mut locked_format_ctx.as_mut().unwrap().pb, file_name.as_ptr() as _, ffi::AVIO_FLAG_WRITE as i32);
             ffi::avformat_write_header(locked_format_ctx, std::ptr::null_mut());
@@ -99,12 +96,12 @@ impl RecordState {
                     println!("📽📽  received frame: pts {}", frame.pts);
                     // pts = pts + 1 as i64;
                     // frame.pts = pts;
-                    let mut ret = ffi::avcodec_send_frame(locked_video_ctx, frame);
+                    let mut ret = ffi::avcodec_send_frame(*video_st.enc_ctx, frame);
                     if ret < 0 {
                         eprintln!("📽📽  avcoded_send_frame: {}", ret);
                     }
                     while ret >= 0 {
-                        ret = ffi::avcodec_receive_packet(locked_video_ctx, pkt);
+                        ret = ffi::avcodec_receive_packet(*video_st.enc_ctx, pkt);
                         if ret == ffi::AVERROR(ffi::EAGAIN) || ret == ffi::AVERROR_EOF {
                             break;
                         } else if ret < 0 {
@@ -112,9 +109,8 @@ impl RecordState {
                         pkt.stream_index = 0;
                         // pkt.time_base = ffi::AVRational{num: 1, den: 25};
 
-                        // TODO: arc the output stream and read the stream's timebase
                         /* rescale output packet timestamp values from codec to stream timebase */
-                        ffi::av_packet_rescale_ts(pkt, (*locked_video_ctx).time_base, ffi::AVRational{num: 1, den: 12800});
+                        ffi::av_packet_rescale_ts(pkt, video_st.enc_ctx.ptr.as_mut().unwrap().time_base, video_st.st.ptr.as_mut().unwrap().time_base);
                         // pkt.as_mut().unwrap().pts = pts;
 
                         // ffi::av_interleaved_write_frame(locked_format_ctx.ptr, pkt);
@@ -144,18 +140,20 @@ impl RecordState {
 }
 
 struct OutputStream {
-    st: *mut ffi::AVStream,
-    enc_ctx: Arc<Mutex<CodecContextWrapper>>,
+    st: StreamWrapper,
+    enc_ctx: CodecContextWrapper,
     next_pts: i64,
-    frame: *mut ffi::AVFrame,
+    frame: FrameWrapper,
 }
+unsafe impl Send for OutputStream{}
+unsafe impl Sync for OutputStream{}
 impl OutputStream {
     fn new() -> OutputStream {
         OutputStream {
-            st: std::ptr::null_mut(),
-            enc_ctx: Arc::new(Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()})),
+            st: StreamWrapper{ ptr: std::ptr::null_mut() },
+            enc_ctx: CodecContextWrapper{ptr:std::ptr::null_mut()},
             next_pts: 0,
-            frame: std::ptr::null_mut(),
+            frame: FrameWrapper{ ptr: std::ptr::null_mut() },
         }
     }
 }
@@ -167,10 +165,9 @@ unsafe fn add_stream(
 ) {
     *codec = ffi::avcodec_find_encoder(codec_id);
     let c = ffi::avcodec_alloc_context3(codec.as_ref().unwrap());
-    let mut enc_ctx = ost.enc_ctx.lock().unwrap();
-    ost.st = ffi::avformat_new_stream(*oc, std::ptr::null_mut());
+    ost.st = StreamWrapper{ ptr: ffi::avformat_new_stream(*oc, std::ptr::null_mut()) };
     let c = c.as_mut().unwrap();
-    enc_ctx.borrow_mut().ptr = c;
+    ost.enc_ctx.ptr = c;
     match codec.as_ref().unwrap().type_ {
         ffi::AVMediaType_AVMEDIA_TYPE_VIDEO => {
             c.codec_id = codec.as_ref().unwrap().id;
@@ -204,13 +201,10 @@ unsafe fn open_video(
     codec: &mut *const ffi::AVCodec,
     ost: &mut OutputStream,
 ) {
-    let _ = ffi::avcodec_open2(ost.enc_ctx.lock().unwrap().ptr, *codec, std::ptr::null_mut());
+    let _ = ffi::avcodec_open2(ost.enc_ctx.ptr, *codec, std::ptr::null_mut());
     eprintln!("📽📽  opened codec: {:?}", codec);
 
-    ffi::avcodec_parameters_from_context(ost.st.as_mut().unwrap().codecpar, ost.enc_ctx.lock().unwrap().ptr);
-    // self.video_ctx = Arc::new(Mutex::new(CodecContextWrapper{
-    //     ptr:  c
-    // }));
+    ffi::avcodec_parameters_from_context(ost.st.as_mut().unwrap().codecpar, ost.enc_ctx.ptr);
 }
 
 pub struct FormatContextWrapper {
