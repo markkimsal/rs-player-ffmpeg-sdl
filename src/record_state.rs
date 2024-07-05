@@ -90,38 +90,7 @@ impl RecordState {
             eprintln!("📽📽  output file : output.mp4");
             while let Ok(msg) = rx.recv() {
                 unsafe {
-
-                    let frame = msg.ptr.as_mut().unwrap();
-                    println!("📽📽  received frame: wxh {}x{}", frame.width, frame.height);
-                    println!("📽📽  received frame: pts {}", frame.pts);
-                    // pts = pts + 1 as i64;
-                    // frame.pts = pts;
-                    let mut ret = ffi::avcodec_send_frame(*video_st.enc_ctx, frame);
-                    if ret < 0 {
-                        eprintln!("📽📽  avcoded_send_frame: {}", ret);
-                    }
-                    while ret >= 0 {
-                        ret = ffi::avcodec_receive_packet(*video_st.enc_ctx, pkt);
-                        if ret == ffi::AVERROR(ffi::EAGAIN) || ret == ffi::AVERROR_EOF {
-                            break;
-                        } else if ret < 0 {
-                        }
-                        pkt.stream_index = 0;
-                        // pkt.time_base = ffi::AVRational{num: 1, den: 25};
-
-                        /* rescale output packet timestamp values from codec to stream timebase */
-                        ffi::av_packet_rescale_ts(pkt, video_st.enc_ctx.ptr.as_mut().unwrap().time_base, video_st.st.ptr.as_mut().unwrap().time_base);
-                        // pkt.as_mut().unwrap().pts = pts;
-
-                        // ffi::av_interleaved_write_frame(locked_format_ctx.ptr, pkt);
-                        ffi::av_write_frame(locked_format_ctx, pkt);
-                        ffi::av_packet_unref(pkt);
-
-                        // let buf = std::slice::from_raw_parts(pkt.as_ref().unwrap().data, pkt.as_ref().unwrap().size as _);
-                        // eprintln!("📽📽  write packet: {} (size={})", pkt.as_ref().unwrap().pts, pkt.as_ref().unwrap().size);
-                        // let _ =file_out.write(&buf);
-                        // ffi::av_packet_unref(pkt);
-                    }
+                    write_frame_interleaved(&video_st, locked_format_ctx, pkt, pts, &msg);
                 }
             }
             eprintln!("🦀🦀 stopping record thread");
@@ -205,6 +174,46 @@ unsafe fn open_video(
     eprintln!("📽📽  opened codec: {:?}", codec);
 
     ffi::avcodec_parameters_from_context(ost.st.as_mut().unwrap().codecpar, ost.enc_ctx.ptr);
+}
+
+unsafe fn write_frame_interleaved(
+    video_st: &OutputStream,
+    locked_format_ctx: *mut ffi::AVFormatContext,
+    pkt: *mut ffi::AVPacket,
+    pts: i64,
+    msg: &FrameWrapper,
+) {
+    let frame = msg.ptr.as_mut().unwrap();
+    println!("📽📽  received frame: wxh {}x{}", frame.width, frame.height);
+    println!("📽📽  received frame: pts {}", frame.pts);
+    // pts = pts + 1 as i64;
+    // frame.pts = pts;
+    let mut ret = ffi::avcodec_send_frame(*video_st.enc_ctx, frame);
+    if ret < 0 {
+        eprintln!("📽📽  avcoded_send_frame: {}", ret);
+    }
+    while ret >= 0 {
+        ret = ffi::avcodec_receive_packet(*video_st.enc_ctx, pkt);
+        if ret == ffi::AVERROR(ffi::EAGAIN) || ret == ffi::AVERROR_EOF {
+            break;
+        } else if ret < 0 {
+        }
+        (*pkt).stream_index = 0;
+        // pkt.time_base = ffi::AVRational{num: 1, den: 25};
+
+        /* rescale output packet timestamp values from codec to stream timebase */
+        ffi::av_packet_rescale_ts(pkt, video_st.enc_ctx.ptr.as_mut().unwrap().time_base, video_st.st.ptr.as_mut().unwrap().time_base);
+        // pkt.as_mut().unwrap().pts = pts;
+
+        ffi::av_interleaved_write_frame(locked_format_ctx, pkt);
+        // ffi::av_write_frame(locked_format_ctx, pkt);
+        // ffi::av_packet_unref(pkt);
+
+        // let buf = std::slice::from_raw_parts(pkt.as_ref().unwrap().data, pkt.as_ref().unwrap().size as _);
+        // eprintln!("📽📽  write packet: {} (size={})", pkt.as_ref().unwrap().pts, pkt.as_ref().unwrap().size);
+        // let _ =file_out.write(&buf);
+        // ffi::av_packet_unref(pkt);
+    }
 }
 
 pub struct FormatContextWrapper {
