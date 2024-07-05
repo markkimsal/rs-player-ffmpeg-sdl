@@ -61,11 +61,10 @@ impl RecordState {
         // let f = ffi::avformat_alloc_output_context2(&mut fctx, out_fmt, std::ptr::null(), file_name.as_ptr() as _);
         let _ = ffi::avformat_alloc_output_context2(&mut fctx, std::ptr::null(), file_ext.as_ptr() as _, file_name.as_ptr() as _);
         dbg!(&fctx);
-        #[allow(unused_mut)]
-        let mut out_fmt = fctx.as_ref().unwrap().oformat;
+        let out_fmt = (*fctx).oformat;
         self.format_context = Arc::new(Mutex::new(FormatContextWrapper{ptr: fctx}));
         if out_fmt.as_ref().unwrap().video_codec != ffi::AVCodecID_AV_CODEC_ID_NONE {
-            add_stream(&mut video_st, &mut fctx, &mut video_codec, out_fmt.as_ref().unwrap().video_codec);
+            add_stream(&mut video_st, &mut fctx, &mut video_codec, (*out_fmt).video_codec);
             ffi::av_dump_format(fctx, 0, file_name.as_ptr() as _, 1);
         }
         open_video(fctx, &mut video_codec, &mut video_st);
@@ -139,7 +138,7 @@ unsafe fn add_stream(
     ost.enc_ctx.ptr = c;
     match codec.as_ref().unwrap().type_ {
         ffi::AVMediaType_AVMEDIA_TYPE_VIDEO => {
-            c.codec_id = codec.as_ref().unwrap().id;
+            c.codec_id = (*(*codec)).id;
             c.codec_type = ffi::AVMediaType_AVMEDIA_TYPE_VIDEO;
             /* put sample parameters */
             c.bit_rate = 40000;
@@ -160,7 +159,7 @@ unsafe fn add_stream(
             c.time_base = ffi::AVRational{num: 1, den: 25};
         }
         _ => {
-            eprintln!("📽📽  unknnown codec type: {:?}", codec.as_ref().unwrap().type_);
+            eprintln!("📽📽  unknnown codec type: {:?}", (*(*codec)).type_);
         }
     }
 }
@@ -173,7 +172,7 @@ unsafe fn open_video(
     let _ = ffi::avcodec_open2(ost.enc_ctx.ptr, *codec, std::ptr::null_mut());
     eprintln!("📽📽  opened codec: {:?}", codec);
 
-    ffi::avcodec_parameters_from_context(ost.st.as_mut().unwrap().codecpar, ost.enc_ctx.ptr);
+    ffi::avcodec_parameters_from_context((*ost.st.ptr).codecpar, ost.enc_ctx.ptr);
 }
 
 unsafe fn write_frame_interleaved(

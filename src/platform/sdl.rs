@@ -122,6 +122,9 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
         movie_state.video_stream.lock().unwrap().ptr,
         ::std::ptr::null_mut(),
     );
+    let dest_frame =
+        ffi::av_frame_alloc().as_mut()
+        .expect("failed to allocated memory for AVFrame");
 
     'running: loop {
         // i = (i + 1) % 255;
@@ -196,10 +199,6 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
             }
 
             if let Some(frame) = movie_state.dequeue_frame() {
-                let dest_frame =
-                    ffi::av_frame_alloc().as_mut()
-                    .expect("failed to allocated memory for AVFrame");
-
                 let mut in_vfilter = movie_state.in_vfilter.lock().unwrap();
                 let mut out_vfilter = movie_state.out_vfilter.lock().unwrap();
                 let mut vgraph = movie_state.vgraph.lock().unwrap();
@@ -224,13 +223,13 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
                     dest_frame,
                     &mut subsystem.canvas,
                     &mut texture,
-                    ).unwrap_or_default();
+                ).unwrap_or_default();
 
 
                 // let codec_context = unsafe{codec_context.as_ref().unwrap()};
                 // last_pts = ffi::av_rescale_q(frame.ptr.as_ref().unwrap().pts, time_base, ffi::AVRational { num: 1, den: 1 });
                 last_pts = frame.ptr.as_ref().unwrap().best_effort_timestamp;
-                ffi::av_free(dest_frame.opaque);
+                // ffi::av_free(dest_frame.opaque);
             };
         }
         last_clock = ffi::av_gettime_relative();
@@ -239,6 +238,7 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
         screen_cap(subsystem, &mut record_tx, i, &event_pump);
         std::thread::yield_now();
     }
+    ffi::av_free(dest_frame.opaque);
 }
 
 fn record_frame(
@@ -391,10 +391,10 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     let aligned = aligned.as_mut_slice();
 
     // let srf = sdl2::sys::SDL_CreateRGBSurface(0, 1280, 720, 24, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
-    let srf = subsystem.canvas.window().surface(event_pump).unwrap();
-    let mut pitch: usize = srf.pixel_format().raw().as_mut().unwrap().BytesPerPixel as usize;
-    pitch *= srf.width() as usize;
-    dbg!(pitch);
+    // let srf = subsystem.canvas.window().surface(event_pump).unwrap();
+    // let mut pitch: usize = srf.pixel_format().raw().as_mut().unwrap().BytesPerPixel as usize;
+    // pitch *= srf.width() as usize;
+    // dbg!(pitch);
     // let pitch = (1280 * sdl2::pixels::SDL_BYTESPERPIXEL(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P) as _);
     let ret = sdl2::sys::SDL_RenderReadPixels(
         subsystem.canvas.raw() as *mut _,
