@@ -282,33 +282,33 @@ fn blit_frame(
 
 fn fill_frame_with_buffer(frame: &mut ffi::AVFrame, buffer: *const u8, len: usize, i: i64) {
     unsafe {
-        let  bfslice: &[u8] = &*slice_from_raw_parts(buffer, len + 64);
-        let  offset0:usize = frame.linesize[0] as usize * frame.height as usize;
+        let bfslice: &[u8] = &*slice_from_raw_parts(buffer, len);
+        let offset0: usize = frame.linesize[0] as usize * frame.height as usize;
         // let  offset1:usize = frame.linesize[0] as usize * frame.height as usize + frame.linesize[1] as usize * frame.height as usize / 2;
         // let  offset2:usize = frame.linesize[0] as usize * frame.height as usize + (frame.linesize[1] as usize * frame.height as usize / 2 ) + (frame.linesize[2] as usize  * frame.height as usize / 2);
 
-        let  offset1:usize = offset0 + (frame.linesize[1] as usize * frame.height as usize / 2);
-        let  offset2:usize = offset1 + (frame.linesize[2] as usize * frame.height as usize / 2);
+        let offset1: usize = offset0 + (frame.linesize[1] as usize * frame.height as usize / 2);
+        let offset2: usize = offset1 + (frame.linesize[2] as usize * frame.height as usize / 2);
 
         // frame.data[0] = bfslice[0 .. offset0].as_ptr() as *mut _;
         // frame.data[1] = bfslice[offset0 .. offset1].as_ptr() as *mut _;
         // frame.data[2] = bfslice[offset1 .. offset2].as_ptr() as *mut _;
-        let dslice: &mut [u8] = &mut *slice_from_raw_parts_mut(frame.buf[0].as_mut().unwrap().data as _, len);
-        // let crslice: &mut [u8] = &mut *slice_from_raw_parts_mut(frame.data[1], len / 2);
+        let dslice: &mut [u8] = &mut *slice_from_raw_parts_mut((*frame.buf[0]).data as _, len);
+        // let crslice: &mut [u8] = &mut *slice_from_raw_parts_mut((*frame.buf[0]).data.add(offset0), len / 4);
         // let cyslice: &mut [u8] = &mut *slice_from_raw_parts_mut(frame.data[2], len / 2);
         for y in 0 .. frame.height as usize {
             for x in 0 .. frame.width as usize {
-                // dslice[(y * (frame.linesize[0] as usize) + x) as usize] = ((x + y + i as usize) * 3) as u8;
                 dslice[(y * (frame.linesize[0] as usize) + x) as usize] = (bfslice[(y * (frame.linesize[0] as usize) + x) as usize]) as u8;
-                // dslice[(y * (frame.linesize[0] as usize) + x) as usize] = 22 as u8;
             }
         }
  
         for y in 0 .. (frame.height/2) as usize {
+            let y1 = offset0 + (y * frame.linesize[1] as usize);
+            let y2 = offset1 + (y * frame.linesize[2] as usize);
             for x in 0 .. (frame.width/2) as usize {
-                dslice[offset0 + (y * frame.linesize[1] as usize + x) as usize] = bfslice[offset1  + (y * frame.linesize[1] as usize + x) as usize] as u8;
-                dslice[offset1 + (y * frame.linesize[2] as usize + x) as usize] = bfslice[offset1  + (y * frame.linesize[2] as usize + x) as usize] as u8;
-                // dslice[offset0 + (y * frame.linesize[2] as usize + x) as usize] = 22 as u8 ;
+                dslice[y1 + x as usize] = bfslice[y1 + x as usize] as u8;
+                dslice[y2 + x as usize] = bfslice[y2 + x as usize] as u8;
+                // dslice[offset0 + (y * frame.linesize[1] as usize + x) as usize] = 0 as u8 ;
                 // dslice[offset1 + (y * frame.linesize[2] as usize + x) as usize] = 22 as u8 ;
                 // crslice[(y  + x) as usize] = 0 as u8;
                 // cyslice[(y  + x) as usize] = 0 as u8;
