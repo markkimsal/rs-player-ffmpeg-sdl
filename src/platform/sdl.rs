@@ -415,24 +415,9 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
         // dest_frame.data[0] as *mut _,
         // pitch as _,
         1280,
-        // 640 * 3 / 2,
-        // 1280 * 3,
         // subsystem.canvas.window().surface(&event_pump).unwrap().pitch() as _,
-        // 1280 *  3,
+        // 1280 *  3 / 2,
     );
-
-    // write_out_buffer(aligned.as_ptr(), n_units as _);
-    // dbg!(aligned.get(0));
-    // let path = CString::new("test.bmp").unwrap();
-    // let mode = CString::new("rw").unwrap();
-    // let dst = sdl2::sys::SDL_RWFromFile(path.as_ptr() as *const libc::c_char, mode.as_ptr() as *const _);
-    // if dst.is_null() {
-    //     panic!("failed to open test.bmp");
-    // }
-    // if sdl2::sys::SDL_SaveBMP_RW(srf.as_mut().unwrap(), dst, 1) != 0 {
-    //     panic!("failed to save test.bmp");
-    // }
-    // sdl2::sys::SDL_RWclose(dst);
 
     // fill_frame_with_pattern(dest_frame, i);
     fill_frame_with_memcpy(dest_frame, aligned.as_ptr(), n_units as usize, i);
@@ -459,6 +444,6 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     // dest_frame.data[2] = yuvdata.as_ref().unwrap()[2];
     let _ = record_frame(dest_frame, &record_tx);
     // ::std::thread::sleep(Duration::from_secs_f64(0.15));
-    // av_frame_unref(dest_frame);
+    // av_frame_unref(dest_frame as *mut _);
     }
 }
