@@ -280,6 +280,22 @@ fn blit_frame(
     Ok(())
 }
 
+fn fill_frame_with_memcpy(frame: &mut ffi::AVFrame, buffer: *const u8, len: usize, i: i64) {
+    unsafe {
+        let bfslice: &[u8] = &*slice_from_raw_parts(buffer, len);
+        let frameslice: &mut [u8] = &mut *slice_from_raw_parts_mut((*frame.buf[0]).data, len);
+        let cyslice: &mut [u8] = &mut *slice_from_raw_parts_mut(frame.data[2], 1024);
+        frameslice.copy_from_slice(bfslice);
+
+        // frame data is 32 bit aligned
+        // sdl buffers are un-aligned (packed)
+        let offset0: usize = frame.linesize[0] as usize * frame.height as usize;
+        let offset1: usize = offset0 + (frame.linesize[1] as usize * (frame.height as usize / 2));
+        frame.data[1] = frame.data[0].offset(offset0 as isize);
+        frame.data[2] = frame.data[0].offset(offset1 as isize);
+ 
+    }
+}
 fn fill_frame_with_buffer(frame: &mut ffi::AVFrame, buffer: *const u8, len: usize, i: i64) {
     unsafe {
         let bfslice: &[u8] = &*slice_from_raw_parts(buffer, len);
@@ -318,11 +334,11 @@ fn fill_frame_with_buffer(frame: &mut ffi::AVFrame, buffer: *const u8, len: usiz
 }
 
 #[allow(dead_code)]
-fn write_out_buffer(buffer: *const u8, len: usize) {
+fn write_out_buffer(buffer: *const u8, len: usize, filename: &str) {
 
     unsafe {
         // buffer.iter().for_each(|b| println!("{:02x}", b));
-        let mut file_out = std::fs::File::create("test.yuv").expect("cannot open output.mp4");
+        let mut file_out = std::fs::File::create(filename).expect("cannot open output.mp4");
         let bfslice: &[u8] = &*slice_from_raw_parts(buffer, len);
         file_out.write_all(bfslice as _).unwrap();
         // file_out.write_all(buffer.into()).unwrap();
@@ -384,8 +400,8 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     // dest_frame.data[1] = ::std::ptr::null_mut();
     // dest_frame.data[2] = ::std::ptr::null_mut();
     // let n_units = ffi::av_image_get_buffer_size(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P, 1280, 720, 16);
-    let n_units = dest_frame.buf[0].as_mut().unwrap().size;
-    dbg!(n_units);
+    let n_units = (*dest_frame.buf[0]).size;
+    dbg!(n_units, 1280 * 3);
     // let mut aligned: Vec<AlignedBytes> = Vec::with_capacity(n_units as _);
     let mut aligned: Vec<u8> = Vec::with_capacity(n_units as _);
     let aligned = aligned.as_mut_slice();
@@ -396,9 +412,11 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     // pitch *= srf.width() as usize;
     // dbg!(pitch);
     // let pitch = (1280 * sdl2::pixels::SDL_BYTESPERPIXEL(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P) as _);
+
     let ret = sdl2::sys::SDL_RenderReadPixels(
         subsystem.canvas.raw() as *mut _,
         std::ptr::null(),
+        // 0,
         sdl2::sys::SDL_PixelFormatEnum::SDL_PIXELFORMAT_IYUV as _,
         // (dest_frame.buf[0].as_mut().unwrap().buffer) as _,
         aligned.as_mut_ptr() as *mut _,
@@ -427,7 +445,8 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     // sdl2::sys::SDL_RWclose(dst);
 
     // fill_frame_with_pattern(dest_frame, i);
-    fill_frame_with_buffer(dest_frame, aligned.as_ptr(), n_units as usize, i);
+    fill_frame_with_memcpy(dest_frame, aligned.as_ptr(), n_units as usize, i);
+    // write_out_buffer(dest_frame.data[0], n_units as _, "dest_frame.yuv");
     // dest_frame.data[0] = ::std::slice::from_raw_parts_mut(aligned.as_mut_ptr() as *mut u8, 1280 * 720 * 3 / 2);
     // dest_frame.data[0] = aligned.as_mut_ptr() as *mut _;
     // dest_frame.data[0] = (aligned).as_mut_ptr() as *mut _;
