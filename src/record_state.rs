@@ -99,6 +99,7 @@ impl RecordState {
                         (*(*(*msg)).buf[0]).size,
                         "after_write.yuv");
                 }
+                ffi::av_frame_unref(msg.ptr);
             }
             eprintln!("🦀🦀 stopping record thread");
 
