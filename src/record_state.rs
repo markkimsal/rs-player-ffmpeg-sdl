@@ -1,5 +1,9 @@
 #![allow(unused_variables, dead_code)]
-use std::{collections::VecDeque, ops::Deref, sync::{mpsc::SyncSender, Arc, Mutex}, thread::JoinHandle};
+use std::{
+    collections::VecDeque,
+    fs::File, ops::Deref, sync::{mpsc::SyncSender, Arc, Mutex}, thread::JoinHandle
+};
+use std::io::Write;
 
 use rusty_ffmpeg::ffi::{self};
 pub struct RecordState {
@@ -90,6 +94,10 @@ impl RecordState {
             while let Ok(msg) = rx.recv() {
                 unsafe {
                     write_frame_interleaved(&video_st, locked_format_ctx, pkt, pts, &msg);
+                    write_out_buffer(
+                        (*(*(*msg)).buf[0]).data,
+                        (*(*(*msg)).buf[0]).size,
+                        "after_write.yuv");
                 }
             }
             eprintln!("🦀🦀 stopping record thread");
@@ -211,7 +219,7 @@ unsafe fn write_frame_interleaved(
         // let buf = std::slice::from_raw_parts(pkt.as_ref().unwrap().data, pkt.as_ref().unwrap().size as _);
         // eprintln!("📽📽  write packet: {} (size={})", pkt.as_ref().unwrap().pts, pkt.as_ref().unwrap().size);
         // let _ =file_out.write(&buf);
-        // ffi::av_packet_unref(pkt);
+        ffi::av_packet_unref(pkt);
     }
 }
 
@@ -264,5 +272,17 @@ impl Deref for FrameWrapper {
     type Target = *mut ffi::AVFrame;
     fn deref(&self) -> &Self::Target {
         &self.ptr
+    }
+}
+
+#[allow(dead_code)]
+fn write_out_buffer(buffer: *const u8, len: usize, filename: &str) {
+    unsafe {
+        // buffer.iter().for_each(|b| println!("{:02x}", b));
+        let mut file_out = File::create(filename).expect("cannot open output.mp4");
+        let bfslice: &[u8] = &*std::ptr::slice_from_raw_parts(buffer, len);
+        file_out.write_all(bfslice as _).unwrap();
+        // file_out.write_all(buffer.into()).unwrap();
+        let _ = file_out.flush();
     }
 }
