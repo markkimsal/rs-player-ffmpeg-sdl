@@ -335,10 +335,8 @@ unsafe impl Send for Storage<'_>{}
                             break;
                         }
                     }
-
-                } else {
-                    ffi::av_freep(frame as *mut _ as *mut _);
                 }
+                ffi::av_frame_unref(frame as *mut _);
                 ffi::av_packet_unref(packet.ptr);
                 locked_videoqueue.pop_front();
             }
@@ -351,6 +349,7 @@ unsafe impl Send for Storage<'_>{}
             }
         }
         };
+        ffi::av_frame_free(frame as *mut _ as *mut _);
     });
 
 

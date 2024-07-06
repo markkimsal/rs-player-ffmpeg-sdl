@@ -229,7 +229,7 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
                 // let codec_context = unsafe{codec_context.as_ref().unwrap()};
                 // last_pts = ffi::av_rescale_q(frame.ptr.as_ref().unwrap().pts, time_base, ffi::AVRational { num: 1, den: 1 });
                 last_pts = frame.ptr.as_ref().unwrap().best_effort_timestamp;
-                // ffi::av_free(dest_frame.opaque);
+                ffi::av_frame_unref(dest_frame as *mut _);
             };
         }
         last_clock = ffi::av_gettime_relative();
