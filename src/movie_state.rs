@@ -1,24 +1,24 @@
 #![allow(unused_variables, dead_code)]
-use std::{ops::Deref, sync::{Arc, Mutex}, collections::VecDeque};
+use std::{ops::Deref, sync::Mutex, collections::VecDeque};
 
 use rusty_ffmpeg::ffi::{self};
 #[repr(C)]
 pub struct MovieState {
-    pub format_context: Arc<Mutex<FormatContextWrapper>>,
+    pub format_context: Mutex<FormatContextWrapper>,
     pub video_stream_idx: i64,
     pub audio_stream_idx: i64,
-    pub audio_stream: Arc<Mutex<StreamWrapper>>,
-    pub audio_ctx: Arc<Mutex<CodecContextWrapper>>,
+    pub audio_stream: Mutex<StreamWrapper>,
+    pub audio_ctx: Mutex<CodecContextWrapper>,
     pub audio_buf: [u8; 1024 * 1024],
     // pub audio_pkt: *const ffi::AVPacket,
-    pub videoqueue: Arc<Mutex<VecDeque<PacketWrapper>>>,
-    pub video_stream: Arc<Mutex<StreamWrapper>>,
-    pub video_ctx: Arc<Mutex<CodecContextWrapper>>,
-    pub picq: Arc<Mutex<VecDeque<FrameWrapper>>>,
+    pub videoqueue: Mutex<VecDeque<PacketWrapper>>,
+    pub video_stream: Mutex<StreamWrapper>,
+    pub video_ctx: Mutex<CodecContextWrapper>,
+    pub picq: Mutex<VecDeque<FrameWrapper>>,
     pub paused: std::sync::atomic::AtomicBool,
-    pub in_vfilter: *mut ffi::AVFilterContext,   // the first filter in the video chain
-    pub out_vfilter: *mut ffi::AVFilterContext,   // the last filter in the video chain
-    pub vgraph: *mut ffi::AVFilterGraph,
+    pub in_vfilter: Mutex<FilterContextWrapper>,   // the first filter in the video chain
+    pub out_vfilter: Mutex<FilterContextWrapper>,   // the last filter in the video chain
+    pub vgraph: Mutex<FilterGraphWrapper>,
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
@@ -45,28 +45,28 @@ impl MovieState {
     pub fn new () -> MovieState {
         let vgraph = unsafe {ffi::avfilter_graph_alloc()};
         MovieState {
-            format_context: Arc::new(Mutex::new(FormatContextWrapper{ptr:std::ptr::null_mut()})),
+            format_context: Mutex::new(FormatContextWrapper{ptr:std::ptr::null_mut()}),
             video_stream_idx: -1,
             audio_stream_idx: -1,
-            audio_stream: Arc::new(Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()})),
-            audio_ctx: Arc::new(Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()})),
+            audio_stream: Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()}),
+            audio_ctx: Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()}),
             audio_buf: [0; 1024 * 1024],
-            videoqueue: Arc::new(Mutex::new(VecDeque::with_capacity(10))),
+            videoqueue: Mutex::new(VecDeque::with_capacity(10)),
             // audio_pkt: std::ptr::null_mut(),
-            video_stream: Arc::new(Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()})),
-            video_ctx: Arc::new(Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()})),
-            picq: Arc::new(Mutex::new(VecDeque::with_capacity(3))),
+            video_stream: Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()}),
+            video_ctx: Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()}),
+            picq: Mutex::new(VecDeque::with_capacity(3)),
             paused: std::sync::atomic::AtomicBool::new(false),
-            in_vfilter: std::ptr::null_mut(),
-            out_vfilter: std::ptr::null_mut(),
-            vgraph,
+            in_vfilter: Mutex::new(FilterContextWrapper{ ptr:std::ptr::null_mut() }),
+            out_vfilter: Mutex::new(FilterContextWrapper { ptr: std::ptr::null_mut() }),
+            vgraph: Mutex::new(FilterGraphWrapper { ptr: vgraph }),
         }
     }
 }
 unsafe impl Send for MovieState{}
 impl MovieState {
     pub fn set_format_context(&mut self, format_context: *mut ffi::AVFormatContext) {
-        self.format_context = Arc::new(Mutex::new(FormatContextWrapper{ptr:format_context}));
+        self.format_context = Mutex::new(FormatContextWrapper{ptr:format_context});
     }
     pub fn enqueue_packet(&self, packet: *mut ffi::AVPacket) -> Result<(), ()> {
         let mut vq = self.videoqueue.lock().unwrap();
@@ -123,7 +123,7 @@ impl MovieState {
     }
 
 }
-pub fn movie_state_enqueue_packet(videoqueue: &Arc<Mutex<VecDeque<PacketWrapper>>>, packet: *mut ffi::AVPacket) -> Result<(), ()> {
+pub fn movie_state_enqueue_packet(videoqueue: &Mutex<VecDeque<PacketWrapper>>, packet: *mut ffi::AVPacket) -> Result<(), ()> {
     let mut vq = videoqueue.lock().unwrap();
     if vq.len() >= 10 {
         return Err(());
@@ -131,7 +131,7 @@ pub fn movie_state_enqueue_packet(videoqueue: &Arc<Mutex<VecDeque<PacketWrapper>
     vq.push_back(PacketWrapper{ptr:packet});
     return Ok(());
 }
-pub fn movie_state_enqueue_frame(picq: &Arc<Mutex<VecDeque<FrameWrapper>>>, frame: *mut ffi::AVFrame) -> Result<(), ()> {
+pub fn movie_state_enqueue_frame(picq: &Mutex<VecDeque<FrameWrapper>>, frame: *mut ffi::AVFrame) -> Result<(), ()> {
     let mut pq = picq.lock().unwrap();
     if pq.len() >= 4 {
         // eprintln!("dropping frame");
@@ -141,7 +141,27 @@ pub fn movie_state_enqueue_frame(picq: &Arc<Mutex<VecDeque<FrameWrapper>>>, fram
     return Ok(());
 }
 
+pub struct FilterGraphWrapper {
+    pub ptr: *mut ffi::AVFilterGraph,
+}
+unsafe impl Send for FilterGraphWrapper{}
+impl Deref for FilterGraphWrapper {
+    type Target = *mut ffi::AVFilterGraph;
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
+    }
+}
 
+pub struct FilterContextWrapper {
+    pub ptr: *mut ffi::AVFilterContext,
+}
+unsafe impl Send for FilterContextWrapper{}
+impl Deref for FilterContextWrapper {
+    type Target = *mut ffi::AVFilterContext;
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
+    }
+}
 
 pub struct FormatContextWrapper {
     pub ptr: *mut ffi::AVFormatContext,
