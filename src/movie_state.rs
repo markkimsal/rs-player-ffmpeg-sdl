@@ -1,6 +1,7 @@
 #![allow(unused_variables, dead_code)]
 use std::{ops::Deref, sync::Mutex, collections::VecDeque};
 
+use log::info;
 use rusty_ffmpeg::ffi::{self};
 #[repr(C)]
 pub struct MovieState {
@@ -38,7 +39,7 @@ impl Drop for MovieState {
 
         // make sure its empty after giving up the lock
         assert!(self.videoqueue.lock().unwrap().is_empty());
-        println!("dropping movie state");
+        info!("dropping movie state");
     }
 }
 impl MovieState {

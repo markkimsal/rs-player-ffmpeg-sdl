@@ -4,6 +4,7 @@ use std::{
     fs::File, ops::Deref, sync::{mpsc::SyncSender, Arc, Mutex}, thread::JoinHandle
 };
 use std::io::Write;
+use log::{debug, error, info};
 
 use rusty_ffmpeg::ffi::{self};
 pub struct RecordState {
@@ -32,7 +33,7 @@ impl Drop for RecordState {
             ffi::avformat_free_context(format_ctx.ptr);
             drop(format_ctx);
         };
-        println!("dropping record state");
+        info!("dropping record state");
     }
 }
 
@@ -64,12 +65,10 @@ impl RecordState {
         // let f = ffi::avformat_alloc_output_context2(&mut fctx, std::ptr::null(), file_ext.as_ptr() as _, file_name.as_ptr() as _);
         // let f = ffi::avformat_alloc_output_context2(&mut fctx, out_fmt, std::ptr::null(), file_name.as_ptr() as _);
         let _ = ffi::avformat_alloc_output_context2(&mut fctx, std::ptr::null(), file_ext.as_ptr() as _, file_name.as_ptr() as _);
-        dbg!(&fctx);
         let out_fmt = (*fctx).oformat;
         self.format_context = Arc::new(Mutex::new(FormatContextWrapper{ptr: fctx}));
         if out_fmt.as_ref().unwrap().video_codec != ffi::AVCodecID_AV_CODEC_ID_NONE {
             add_stream(&mut video_st, &mut fctx, &mut video_codec, (*out_fmt).video_codec);
-            ffi::av_dump_format(fctx, 0, file_name.as_ptr() as _, 1);
         }
         open_video(fctx, &mut video_codec, &mut video_st);
         ffi::av_dump_format(fctx, 0, file_name.as_ptr() as _, 1);
@@ -90,7 +89,7 @@ impl RecordState {
             // let mut file_out = std::fs::File::create("output.mp4").expect("cannot open output.mp4");
             ffi::avio_open(&mut locked_format_ctx.as_mut().unwrap().pb, file_name.as_ptr() as _, ffi::AVIO_FLAG_WRITE as i32);
             ffi::avformat_write_header(locked_format_ctx, std::ptr::null_mut());
-            eprintln!("📽📽  output file : output.mp4");
+            info!("📽 📽  output file : output.mp4");
             while let Ok(msg) = rx.recv() {
                 unsafe {
                     write_frame_interleaved(&video_st, locked_format_ctx, pkt, pts, &msg);
@@ -101,7 +100,7 @@ impl RecordState {
                 }
                 ffi::av_frame_unref(msg.ptr);
             }
-            eprintln!("🦀🦀 stopping record thread");
+            info!("📽 📽 stopping record thread");
 
             // if locked_video_ctx.lock().unwrap().ptr.as_ref().unwrap().codec_id == ffi::AVCodecID_AV_CODEC_ID_MPEG2VIDEO {
             //     // let endcode: [u8; 4 ] = [ 0, 0, 1, 0xb7 ];
@@ -168,7 +167,7 @@ unsafe fn add_stream(
             c.time_base = ffi::AVRational{num: 1, den: 25};
         }
         _ => {
-            eprintln!("📽📽  unknnown codec type: {:?}", (*(*codec)).type_);
+            error!("📽 📽  unknnown codec type: {:?}", (*(*codec)).type_);
         }
     }
 }
@@ -179,7 +178,7 @@ unsafe fn open_video(
     ost: &mut OutputStream,
 ) {
     let _ = ffi::avcodec_open2(ost.enc_ctx.ptr, *codec, std::ptr::null_mut());
-    eprintln!("📽📽  opened codec: {:?}", codec);
+    info!("📽 📽  opened codec: {:?}", codec);
 
     ffi::avcodec_parameters_from_context((*ost.st.ptr).codecpar, ost.enc_ctx.ptr);
 }
@@ -192,13 +191,12 @@ unsafe fn write_frame_interleaved(
     msg: &FrameWrapper,
 ) {
     let frame = msg.ptr.as_mut().unwrap();
-    println!("📽📽  received frame: wxh {}x{}", frame.width, frame.height);
-    println!("📽📽  received frame: pts {}", frame.pts);
+    debug!("📽 📽  received frame: wxh {}x{}  pts: {}", frame.width, frame.height, frame.pts);
     // pts = pts + 1 as i64;
     // frame.pts = pts;
     let mut ret = ffi::avcodec_send_frame(*video_st.enc_ctx, frame);
     if ret < 0 {
-        eprintln!("📽📽  avcoded_send_frame: {}", ret);
+        error!("📽 📽  avcodec_send_frame: {}", ret);
     }
     while ret >= 0 {
         ret = ffi::avcodec_receive_packet(*video_st.enc_ctx, pkt);
@@ -218,7 +216,7 @@ unsafe fn write_frame_interleaved(
         // ffi::av_packet_unref(pkt);
 
         // let buf = std::slice::from_raw_parts(pkt.as_ref().unwrap().data, pkt.as_ref().unwrap().size as _);
-        // eprintln!("📽📽  write packet: {} (size={})", pkt.as_ref().unwrap().pts, pkt.as_ref().unwrap().size);
+        // eprintln!("📽 📽  write packet: {} (size={})", pkt.as_ref().unwrap().pts, pkt.as_ref().unwrap().size);
         // let _ =file_out.write(&buf);
         ffi::av_packet_unref(pkt);
     }

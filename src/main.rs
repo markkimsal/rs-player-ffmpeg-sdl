@@ -4,6 +4,11 @@ use rsplayer::app::{open_movie, play_movie};
 mod movie_state;
 
 fn main() {
+
+    let mut clog = colog::default_builder();
+    clog.filter(None, log::LevelFilter::Info);
+    clog.init();
+
     let args: Vec<String> = std::env::args().collect();
     // you can't pass cli arguments to debug with rust-analyzer
     let default_file = String::from("foo.mp4");

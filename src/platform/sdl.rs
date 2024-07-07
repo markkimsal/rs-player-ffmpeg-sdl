@@ -1,6 +1,7 @@
 #![allow(unused_variables, dead_code, unused_imports)]
 use std::{io::Write, ops::Deref, ptr::{slice_from_raw_parts, slice_from_raw_parts_mut}, sync::mpsc::{Sender, SyncSender}, thread::JoinHandle, time::Duration};
 
+use log::debug;
 use rusty_ffmpeg::ffi::{self, av_frame_unref};
 
 use sdl2::{
@@ -182,16 +183,16 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
                     // let mut delay:f64 = ( pts - last_pts ) as f64;
                     // let mut delay:f64 = ( pts ) as f64;
                     delay *= ( pts - last_pts ) as f64;
-                    println!("pts: {}", delay );
+                    debug!("pts: {}", delay );
                     {
                     // delay *= (time_base.num as f64) / (time_base.den as f64);
                     }
-                    println!("delay 1: {}", delay );
+                    debug!("delay 1: {}", delay );
                     delay -= (ffi::av_gettime_relative() - last_clock) as f64 / 100_000.;
                 }
                     // println!("av_gettime_relative: {}", (ffi::av_gettime_relative() - last_clock ) as f64 / 100_000. );
                 if delay > 0. {
-                    println!("pts: {}", delay );
+                    debug!("pts: {}", delay );
 
                     // println!("delay 2: {}", delay );
                     ::std::thread::sleep(Duration::from_secs_f64(1. / delay));
@@ -391,7 +392,6 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     // dest_frame.data[2] = ::std::ptr::null_mut();
     // let n_units = ffi::av_image_get_buffer_size(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P, 1280, 720, 16);
     let n_units = (*dest_frame.buf[0]).size;
-    dbg!(n_units, 1280 * 3);
     // let mut aligned: Vec<AlignedBytes> = Vec::with_capacity(n_units as _);
     let mut aligned: Vec<u8> = Vec::with_capacity(n_units as _);
     let aligned = aligned.as_mut_slice();

@@ -6,6 +6,9 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use log::debug;
+use log::info;
+use log::error;
 use rusty_ffmpeg::ffi;
 
 use rusty_ffmpeg::ffi::av_frame_free;
@@ -284,7 +287,7 @@ unsafe impl Send for Storage<'_>{}
     let pause_packets = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     std::thread::spawn(move|| {
         for msg in rx {
-            println!("🦀🦀 received message: {}", msg);
+            debug!("🦀🦀 received message: {}", msg);
         }
     });
     let movie_state_arc    = std::sync::Arc::new(movie_state);
@@ -384,7 +387,7 @@ fn decode_packet(
     let mut response = unsafe { ffi::avcodec_send_packet(codec_context, packet) };
 
     if response < 0 {
-        eprintln!("Error while sending a packet to the decoder. {:?}", ffi::av_err2str(response));
+        error!("Error while sending a packet to the decoder. {:?}", ffi::av_err2str(response));
         return Err(String::from("Error while sending a packet to the decoder."));
     }
     while response >= 0 {
@@ -400,7 +403,7 @@ fn decode_packet(
             ));
         }
         // let codec_context = unsafe{codec_context.as_ref().unwrap()};
-        println!(
+        debug!(
             "Frame {} (type={}, size={} bytes) pts {} key_frame {} [DTS {}]",
             codec_context.frame_number,
             unsafe { ffi::av_get_picture_type_char(frame.pict_type) },
@@ -427,9 +430,9 @@ unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) 
 	if !tag.is_null() {
 		return libc::atoi((*tag).value);
 	}
-    eprintln!(" 🔄 got no rotation tag.");
+    info!(" 🔄 got no rotation tag.");
     // let streams = NonNull::<ffi::AVStream>::new((*format_ctx).streams as *mut _).unwrap();
-    eprintln!(" 🔄 nb_streams ptr is {:?}", (*format_ctx).nb_streams);
+    info!(" 🔄 nb_streams ptr is {:?}", (*format_ctx).nb_streams);
     let mut rotation = 0.;
     for i in 0..(*format_ctx).nb_streams as usize {
         unsafe {
@@ -437,16 +440,16 @@ unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) 
             let stream_ptr = ((*format_ctx).streams as *mut *mut ffi::AVStream).add(i);
             // let s = Box::<ffi::AVStream>::from_raw(*_ptr.as_ptr());
             let s = Box::<ffi::AVStream>::from_raw(*stream_ptr);
-            eprintln!(" 🔄 streams nb_side_data is {:?}",s.nb_side_data);
+            info!(" 🔄 streams nb_side_data is {:?}",s.nb_side_data);
             if !s.side_data.is_null() {
                 let _display_matrix = ffi::av_stream_get_side_data(
                     Box::into_raw(s) as *const _,
                     ffi::AVPacketSideDataType_AV_PKT_DATA_DISPLAYMATRIX,
                     std::ptr::null_mut()
                 );
-                eprintln!(" 🔄 displaymatrix is {:?}", _display_matrix);
+                info!(" 🔄 displaymatrix is {:?}", _display_matrix);
                 rotation = -ffi::av_display_rotation_get(_display_matrix as *const i32);
-                eprintln!(" 🔄 rotation is {:?}", rotation);
+                info!(" 🔄 rotation is {:?}", rotation);
             } else {
                 // consume the box
                 let unptr = Box::into_raw(s);
