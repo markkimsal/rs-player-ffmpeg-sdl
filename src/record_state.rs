@@ -5,8 +5,8 @@ use std::{
 };
 use std::io::Write;
 use log::{debug, error, info};
+use rusty_ffmpeg::ffi;
 
-use rusty_ffmpeg::ffi::{self};
 pub struct RecordState {
     pub format_context: Arc<Mutex<FormatContextWrapper>>,
     pub audio_stream: Arc<Mutex<StreamWrapper>>,
@@ -67,16 +67,12 @@ impl RecordState {
         let _ = ffi::avformat_alloc_output_context2(&mut fctx, std::ptr::null(), file_ext.as_ptr() as _, file_name.as_ptr() as _);
         let out_fmt = (*fctx).oformat;
         self.format_context = Arc::new(Mutex::new(FormatContextWrapper{ptr: fctx}));
-        if out_fmt.as_ref().unwrap().video_codec != ffi::AVCodecID_AV_CODEC_ID_NONE {
+        if (*out_fmt).video_codec != ffi::AVCodecID_AV_CODEC_ID_NONE {
             add_stream(&mut video_st, &mut fctx, &mut video_codec, (*out_fmt).video_codec);
         }
         open_video(fctx, &mut video_codec, &mut video_st);
         ffi::av_dump_format(fctx, 0, file_name.as_ptr() as _, 1);
 
-        /* Some formats want stream headers to be separate. */
-        // if (fctx.as_mut().unwrap().oformat.as_ref().unwrap().flags & ffi::AVFMT_GLOBALHEADER as i32) != 0 {
-        //     self.video_ctx.lock().unwrap().ptr.as_mut().unwrap().flags |= ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
-        // }
         // let locked_video_ctx = self.video_ctx.clone(); // expect("someone else is using the encode context");
 
         let locked_format_ctx = self.format_context.clone(); // expect("someone else is using the encode context");
@@ -139,14 +135,17 @@ unsafe fn add_stream(
     codec: &mut *const ffi::AVCodec,
     codec_id: ffi::AVCodecID,
 ) {
-    *codec = ffi::avcodec_find_encoder(codec_id);
-    let c = ffi::avcodec_alloc_context3(codec.as_ref().unwrap());
     ost.st = StreamWrapper{ ptr: ffi::avformat_new_stream(*oc, std::ptr::null_mut()) };
+
+    let desired_encoder: std::ffi::CString = std::ffi::CString::new("libopenh264").unwrap();
+    *codec = ffi::avcodec_find_encoder_by_name(desired_encoder.as_ptr() as _);
+    if codec.is_null() {
+        *codec = ffi::avcodec_find_encoder(codec_id);
+    }
+    let c = ffi::avcodec_alloc_context3(*codec);
     let c = c.as_mut().unwrap();
-    ost.enc_ctx.ptr = c;
     match codec.as_ref().unwrap().type_ {
         ffi::AVMediaType_AVMEDIA_TYPE_VIDEO => {
-            c.codec_id = (*(*codec)).id;
             c.codec_type = ffi::AVMediaType_AVMEDIA_TYPE_VIDEO;
             /* put sample parameters */
             c.bit_rate = 40000;
@@ -170,6 +169,7 @@ unsafe fn add_stream(
             error!("📽 📽  unknnown codec type: {:?}", (*(*codec)).type_);
         }
     }
+    ost.enc_ctx.ptr = c;
 }
 
 unsafe fn open_video(
@@ -180,6 +180,10 @@ unsafe fn open_video(
     let _ = ffi::avcodec_open2(ost.enc_ctx.ptr, *codec, std::ptr::null_mut());
     info!("📽 📽  opened codec: {:?}", codec);
 
+    /* Some formats want stream headers to be separate. */
+    // if ((*oc).oformat.as_ref().unwrap().flags & ffi::AVFMT_GLOBALHEADER as i32) != 0 {
+    //     ost.enc_ctx.ptr.as_mut().unwrap().flags |= ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+    // }
     ffi::avcodec_parameters_from_context((*ost.st.ptr).codecpar, ost.enc_ctx.ptr);
 }
 
@@ -197,6 +201,7 @@ unsafe fn write_frame_interleaved(
     let mut ret = ffi::avcodec_send_frame(*video_st.enc_ctx, frame);
     if ret < 0 {
         error!("📽 📽  avcodec_send_frame: {}", ret);
+        error!("📽 📽  avcodec_send_frame: {}", ffi::av_err2str(ret));
     }
     while ret >= 0 {
         ret = ffi::avcodec_receive_packet(*video_st.enc_ctx, pkt);
