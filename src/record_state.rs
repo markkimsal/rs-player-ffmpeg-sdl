@@ -205,15 +205,11 @@ unsafe fn write_frame_interleaved(
         } else if ret < 0 {
         }
         (*pkt).stream_index = 0;
-        // pkt.time_base = ffi::AVRational{num: 1, den: 25};
 
         /* rescale output packet timestamp values from codec to stream timebase */
-        ffi::av_packet_rescale_ts(pkt, video_st.enc_ctx.ptr.as_mut().unwrap().time_base, video_st.st.ptr.as_mut().unwrap().time_base);
-        // pkt.as_mut().unwrap().pts = pts;
+        ffi::av_packet_rescale_ts(pkt, (*video_st.enc_ctx.ptr).time_base, (*video_st.st.ptr).time_base);
 
         ffi::av_interleaved_write_frame(locked_format_ctx, pkt);
-        // ffi::av_write_frame(locked_format_ctx, pkt);
-        // ffi::av_packet_unref(pkt);
 
         // let buf = std::slice::from_raw_parts(pkt.as_ref().unwrap().data, pkt.as_ref().unwrap().size as _);
         // eprintln!("📽 📽  write packet: {} (size={})", pkt.as_ref().unwrap().pts, pkt.as_ref().unwrap().size);
