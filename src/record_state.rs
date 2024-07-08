@@ -68,7 +68,7 @@ impl RecordState {
         let out_fmt = (*fctx).oformat;
         self.format_context = Arc::new(Mutex::new(FormatContextWrapper{ptr: fctx}));
         if (*out_fmt).video_codec != ffi::AVCodecID_AV_CODEC_ID_NONE {
-            add_stream(&mut video_st, &mut fctx, &mut video_codec, (*out_fmt).video_codec);
+            add_stream(&mut video_st, &mut fctx, &mut video_codec, (*out_fmt).video_codec, 1280, 720);
         }
         open_video(fctx, &mut video_codec, &mut video_st);
         ffi::av_dump_format(fctx, 0, file_name.as_ptr() as _, 1);
@@ -134,6 +134,8 @@ unsafe fn add_stream(
     oc: &mut *mut ffi::AVFormatContext,
     codec: &mut *const ffi::AVCodec,
     codec_id: ffi::AVCodecID,
+    width: usize,
+    height: usize,
 ) {
     ost.st = StreamWrapper{ ptr: ffi::avformat_new_stream(*oc, std::ptr::null_mut()) };
 
@@ -150,8 +152,8 @@ unsafe fn add_stream(
             /* put sample parameters */
             c.bit_rate = 40000;
             /* resolution must be a multiple of two */
-            c.width = 1280;
-            c.height = 720;
+            c.width = width as _;
+            c.height = height as _;
             /* frames per second */
             c.time_base = ffi::AVRational{ num: 1, den: 25};
             c.framerate = ffi::AVRational{ num: 25, den: 1};
