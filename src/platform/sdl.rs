@@ -329,7 +329,12 @@ fn write_out_buffer(buffer: *const u8, len: usize, filename: &str) {
 
     unsafe {
         // buffer.iter().for_each(|b| println!("{:02x}", b));
-        let mut file_out = std::fs::File::create(filename).expect("cannot open output.mp4");
+        let mut file_out = std::fs::File::options()
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(filename)
+            .expect("cannot open output.mp4");
         let bfslice: &[u8] = &*slice_from_raw_parts(buffer, len);
         file_out.write_all(bfslice as _).unwrap();
         // file_out.write_all(buffer.into()).unwrap();
@@ -383,15 +388,11 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     let ret = ffi::av_frame_get_buffer(dest_frame, 0);
 
     dest_frame.pts = i;
-    /* Y */
-    // let u_pixel_ptr = (pixels) as *mut u8;
-    // dest_frame.data[0] = u_pixel_ptr;
-    // dest_frame.data[1] = (u_pixel_ptr as *mut u8);
-    // dest_frame.data[0] = pixels as *mut u8;
-    // dest_frame.data[1] = ::std::ptr::null_mut();
-    // dest_frame.data[2] = ::std::ptr::null_mut();
-    // let n_units = ffi::av_image_get_buffer_size(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P, 1280, 720, 16);
-    let n_units = (*dest_frame.buf[0]).size;
+
+    // we don't need alignment
+    // let n_units = (*dest_frame.buf[0]).size;
+    let n_units = dest_frame.width * dest_frame.height * 3 / 2;
+
     // let mut aligned: Vec<AlignedBytes> = Vec::with_capacity(n_units as _);
     let mut aligned: Vec<u8> = Vec::with_capacity(n_units as _);
     let aligned = aligned.as_mut_slice();
@@ -414,7 +415,7 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
         // srf.as_mut().unwrap().pitch as _,
         // dest_frame.data[0] as *mut _,
         // pitch as _,
-        1280,
+        dest_frame.width,
         // subsystem.canvas.window().surface(&event_pump).unwrap().pitch() as _,
         // 1280 *  3 / 2,
     );
@@ -422,6 +423,7 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     // fill_frame_with_pattern(dest_frame, i);
     fill_frame_with_memcpy(dest_frame, aligned.as_ptr(), n_units as usize, i);
     // write_out_buffer(dest_frame.data[0], n_units as _, "dest_frame.yuv");
+    // write_out_buffer(aligned.as_ptr(), n_units as _, "dest_frame.yuv");
     // dest_frame.data[0] = ::std::slice::from_raw_parts_mut(aligned.as_mut_ptr() as *mut u8, 1280 * 720 * 3 / 2);
     // dest_frame.data[0] = aligned.as_mut_ptr() as *mut _;
     // dest_frame.data[0] = (aligned).as_mut_ptr() as *mut _;

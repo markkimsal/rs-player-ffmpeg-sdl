@@ -89,10 +89,10 @@ impl RecordState {
             while let Ok(msg) = rx.recv() {
                 unsafe {
                     write_frame_interleaved(&video_st, locked_format_ctx, pkt, pts, &msg);
-                    write_out_buffer(
-                        (*(*(*msg)).buf[0]).data,
-                        (*(*(*msg)).buf[0]).size,
-                        "after_write.yuv");
+                    // write_out_buffer(
+                    //     (*(*(*msg)).buf[0]).data,
+                    //     (*(*(*msg)).buf[0]).size,
+                    //     "after_write.yuv");
                 }
                 ffi::av_frame_unref(msg.ptr);
             }
