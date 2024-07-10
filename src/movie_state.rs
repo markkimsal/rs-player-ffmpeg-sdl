@@ -1,7 +1,7 @@
 #![allow(unused_variables, dead_code)]
 use std::{ops::Deref, sync::Mutex, collections::VecDeque};
 
-use log::info;
+use log::{error, info};
 use rusty_ffmpeg::ffi::{self};
 #[repr(C)]
 pub struct MovieState {
@@ -133,12 +133,16 @@ pub fn movie_state_enqueue_packet(videoqueue: &Mutex<VecDeque<PacketWrapper>>, p
     return Ok(());
 }
 pub fn movie_state_enqueue_frame(picq: &Mutex<VecDeque<FrameWrapper>>, frame: *mut ffi::AVFrame) -> Result<(), ()> {
+
     let mut pq = picq.lock().unwrap();
     if pq.len() >= 4 {
         // eprintln!("dropping frame");
         return Err(());
     }
-    pq.push_back(FrameWrapper{ptr:frame});
+    unsafe {
+        let clone_frame = ffi::av_frame_clone(frame);
+        pq.push_back(FrameWrapper{ptr:clone_frame});
+    }
     return Ok(());
 }
 
