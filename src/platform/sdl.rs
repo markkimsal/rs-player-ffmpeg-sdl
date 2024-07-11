@@ -449,3 +449,94 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     // av_frame_unref(dest_frame as *mut _);
     }
 }
+
+unsafe fn draw_ui(
+    renderer: &mut Canvas<Window>,
+    tex2: &mut Texture,
+    is_recording: bool,
+) {
+    sdl2::sys::SDL_SetRenderTarget(
+        renderer.raw(),
+        tex2.raw()
+    );
+
+    sdl2::sys::SDL_SetRenderDrawColor(
+        renderer.raw(),
+        0,
+        0,
+        0,
+        0,
+    );
+
+    sdl2::sys::SDL_RenderClear(
+        renderer.raw()
+    );
+    if !is_recording {
+        sdl2::sys::SDL_SetRenderTarget(
+            renderer.raw(),
+            std::ptr::null_mut(),
+        );
+        return;
+    }
+
+    let dest_rect = SDL_Rect {
+        x: 20,
+        y: 20,
+        w: 60,
+        h: 60,
+    };
+    sdl2::sys::SDL_SetRenderDrawColor(
+        renderer.raw(),
+        202,
+        22,
+        22,
+        255,
+    );
+    sdl2::sys::SDL_RenderClear(
+        renderer.raw()
+    );
+
+    sdl2::sys::SDL_RenderCopy(
+        renderer.raw(),
+        tex2.raw(),
+        std::ptr::null(),
+        &dest_rect,
+    );
+    sdl2::sys::SDL_SetRenderTarget(
+        renderer.raw(),
+        std::ptr::null_mut(),
+    );
+
+}
+
+unsafe fn composite(
+    renderer: &mut Canvas<Window>,
+    tex: &mut Texture,
+    tex2: &mut Texture
+) {
+
+    sdl2::sys::SDL_SetRenderTarget(
+        renderer.raw(),
+        tex.raw(),
+    );
+    let dest_rect = SDL_Rect {
+        x: 30,
+        y: 30,
+        w: 60,
+        h: 60,
+    };
+
+    sdl2::sys::SDL_SetTextureBlendMode(tex2.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_BLEND);
+    sdl2::sys::SDL_SetTextureAlphaMod(tex2.raw(), 135 as u8);
+    sdl2::sys::SDL_RenderCopy(
+        renderer.raw(),
+        tex2.raw(),
+        std::ptr::null(),
+        &dest_rect,
+    );
+
+    sdl2::sys::SDL_SetRenderTarget(
+        renderer.raw(),
+        std::ptr::null_mut(),
+    );
+}
