@@ -5,13 +5,14 @@ use log::debug;
 use rusty_ffmpeg::ffi::{self, av_frame_unref};
 
 use sdl2::{
-    event::Event,
-    Error,
-    keyboard::Keycode,
-    pixels::{Color, PixelFormatEnum},
-    render::{Canvas, Texture, TextureAccess},
-    sys::SDL_UpdateYUVTexture,
+    event::Event, keyboard::Keycode, pixels::{Color, PixelFormatEnum}, render::{Canvas, Texture, TextureAccess},
+    sys::{
+        SDL_LockTexture,
+        SDL_UnlockTexture,
+        SDL_UpdateYUVTexture
+    },
     video::Window,
+    Error,
     Sdl
 };
 
@@ -78,9 +79,21 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
         textw,
         texth
     ).unwrap();
-    // let mut texture = subsystem.canvas.su;
- 
-    // let mut texture: SDL_SW_YUVTexture = sdl2::sys::SDL_SW_CreateYUVTexture(PixelFormatEnum::IYUV, textw, texth).unwrap();
+
+    let mut movie_texture: Texture = texture_creator.create_texture(
+        Some(PixelFormatEnum::IYUV),
+        TextureAccess::Target,
+        textw,
+        texth
+    ).unwrap();
+
+    let mut draw_texture: Texture = texture_creator.create_texture(
+        Some(PixelFormatEnum::IYUV),
+        TextureAccess::Target,
+        textw,
+        texth
+    ).unwrap();
+
     let _ = sdl2::video::drivers()
         .map(|d: &'static str| {eprintln!("driver {}", d);});
     dbg!(sdl2::video::drivers().len());
@@ -220,8 +233,20 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
                 ffi::av_buffersink_get_frame_flags(out_vfilter.ptr, dest_frame, 0);
 
 
-                blit_frame(
+                frame_to_texture(
                     dest_frame,
+                    &mut subsystem.canvas,
+                    &mut movie_texture,
+                ).unwrap_or_default();
+
+                texture_to_texture(
+                    &mut movie_texture,
+                    &mut subsystem.canvas,
+                    &mut texture,
+                ).unwrap_or_default();
+
+
+                blit_texture(
                     &mut subsystem.canvas,
                     &mut texture,
                 ).unwrap_or_default();
@@ -254,29 +279,57 @@ fn record_frame(
     Ok(())
 }
 
-fn blit_frame(
-    dest_frame: &mut ffi::AVFrame,
+fn frame_to_texture(
+    movie_frame: &mut ffi::AVFrame,
     canvas: &mut Canvas<Window>,
     texture: &mut Texture,
 ) -> Result<(), String> {
-
-    // let new_frame = dest_frame;
-    // unsafe { SDL_UpdateTexture(
-    //     texture.raw(), std::ptr::null(),
-    //     (*dest_frame).data[0] as _, (*dest_frame).linesize[0] as _
-    // ) };
-    // unsafe { SDL_UpdateTexture(
-    //     texture.raw(), std::ptr::null(),
-    //     (new_frame).data[0] as _, (new_frame).linesize[0] as _
-    // ) };
-
-    // SDL cannot handle YUV(J)420P
     unsafe { SDL_UpdateYUVTexture(
         texture.raw(), ::std::ptr::null(),
-        dest_frame.data[0], dest_frame.linesize[0],
-        dest_frame.data[1], dest_frame.linesize[1],
-        dest_frame.data[2], dest_frame.linesize[2],
+        movie_frame.data[0], movie_frame.linesize[0],
+        movie_frame.data[1], movie_frame.linesize[1],
+        movie_frame.data[2], movie_frame.linesize[2],
     ) };
+    Ok(())
+}
+
+fn texture_to_texture(
+    src_texture: &mut Texture,
+    canvas: &mut Canvas<Window>,
+    dest_texture: &mut Texture,
+) -> Result<(), String> {
+
+    let info = src_texture.query();
+    let n_units = info.width * info.height * 3 / 2;
+    let mut pixels: Vec<u8> = Vec::with_capacity(n_units as _);
+    let pixels = pixels.as_mut_slice();
+
+    let offset0: isize = info.width as isize * info.height as isize;
+    let uv_plane_size: isize = (info.width / 2) as isize * (info.height as isize / 2);
+    let offset1: isize = offset0 + uv_plane_size;
+ 
+    unsafe {
+        SDL_LockTexture((*src_texture).raw() as *mut _, std::ptr::null(), pixels.as_mut_ptr() as _, info.width as _);
+        dest_texture.update_yuv(
+            None,
+            std::slice::from_raw_parts(pixels.as_ptr().offset(0), offset0 as _),
+            info.width as _,
+            std::slice::from_raw_parts(pixels.as_ptr().offset(offset0), uv_plane_size as _),
+            (info.width / 2) as _,
+            std::slice::from_raw_parts(pixels.as_ptr().offset(offset1), uv_plane_size as _),
+            (info.width / 2) as _,
+        ).expect("failed to update yuv texture");
+        let debug = ::std::slice::from_raw_parts(pixels.as_ptr().offset(0), 1024);
+        dbg!(&debug);
+        SDL_UnlockTexture((*src_texture).raw() as *mut _);
+    };
+    Ok(())
+}
+
+fn blit_texture(
+    canvas: &mut Canvas<Window>,
+    texture: &mut Texture,
+) -> Result<(), String> {
     canvas.copy(texture, None, None).unwrap();
     Ok(())
 }

@@ -1,4 +1,4 @@
-#![allow(unused_variables, dead_code)]
+#![allow(unused_variables, dead_code, unused)]
 use std::{ops::Deref, sync::Mutex, collections::VecDeque};
 
 use log::{error, info};
