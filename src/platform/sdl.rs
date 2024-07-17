@@ -1,7 +1,10 @@
 #![allow(unused_variables, dead_code, unused_imports)]
 use std::{io::Write, ops::Deref, ptr::{slice_from_raw_parts, slice_from_raw_parts_mut}, sync::mpsc::{Sender, SyncSender}, thread::JoinHandle, time::Duration};
 
-use log::debug;
+use log::{
+    info,
+    debug
+};
 use rusty_ffmpeg::ffi::{self, av_frame_unref};
 
 use sdl2::{
@@ -26,7 +29,7 @@ pub struct SdlSubsystemCtx {
 }
 
 struct AlignedBytes([u8; 3]);
-pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<SdlSubsystemCtx, Error> {
+pub unsafe fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<SdlSubsystemCtx, Error> {
     let sdl_ctx = sdl2::init().unwrap();
     let video_subsystem = match sdl_ctx.video() {
         Ok(video_subsystem) => video_subsystem,
@@ -36,15 +39,23 @@ pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<Sd
         }
     };
 
+    #[allow(unused_mut)]
+    let mut window_flags: u32 = 0;
+    // window_flags |= sdl2::sys::SDL_WindowFlags::SDL_WINDOW_BORDERLESS as u32;
     let window = video_subsystem.window("rs-player-ffmpeg-sdl2", default_width, default_height)
         .resizable()
         .position_centered()
-        .set_window_flags(sdl2::sys::SDL_SWSURFACE)
+        .set_window_flags(window_flags)
+        .borderless()
         .build()
         .unwrap();
+
+    // let canvas = sdl2::sys::SDL_CreateRenderer(window.raw(), -1, sdl2::sys::SDL_RendererFlags::SDL_RENDERER_ACCELERATED);
+    // let canvas = Canvas{ target: window.raw(), context: 1, default_pixel_format: todo!()  }
     let canvas = window
         .into_canvas()
-        .software()
+        // .software()
+        .accelerated()
         .build()
         .unwrap();
 
@@ -52,7 +63,7 @@ pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<Sd
         sdl_ctx,
         canvas,
         is_recording: false
-    })
+})
 }
 
 pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieState>, subsystem: &mut SdlSubsystemCtx, tx: std::sync::mpsc::Sender<String>) {
@@ -96,12 +107,18 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
 
     let _ = sdl2::video::drivers()
         .map(|d: &'static str| {eprintln!("driver {}", d);});
-    dbg!(sdl2::video::drivers().len());
+
+    info!("available video drivers: ");
     let mut iter = sdl2::video::drivers();
-    eprintln!("iter: {:?}", iter.next());
-    eprintln!("iter: {:?}", iter.next());
-    eprintln!("iter: {:?}", iter.next());
-    eprintln!("iter: {:?}", iter.next());
+    iter.for_each(|i|
+        info!(" * {}", iter.next().unwrap())
+    );
+
+    info!("available audio drivers: ");
+    let _ = sdl2::audio::drivers()
+        .for_each(|d: &'static str| info!(" * {}", d));
+        // .map(|d: &'static str| info!(" * audio driver: {}", d));
+
     let info = subsystem.canvas.deref().info();
     dbg!(&info);
 
@@ -236,15 +253,14 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
                 frame_to_texture(
                     dest_frame,
                     &mut subsystem.canvas,
-                    &mut movie_texture,
-                ).unwrap_or_default();
-
-                texture_to_texture(
-                    &mut movie_texture,
-                    &mut subsystem.canvas,
                     &mut texture,
                 ).unwrap_or_default();
 
+                // texture_to_texture(
+                //     &mut movie_texture,
+                //     &mut subsystem.canvas,
+                //     &mut texture,
+                // ).unwrap_or_default();
 
                 blit_texture(
                     &mut subsystem.canvas,
@@ -284,7 +300,9 @@ fn frame_to_texture(
     canvas: &mut Canvas<Window>,
     texture: &mut Texture,
 ) -> Result<(), String> {
-    unsafe { SDL_UpdateYUVTexture(
+    unsafe {
+        set_sdl_yuv_conversion_mode(movie_frame);
+        SDL_UpdateYUVTexture(
         texture.raw(), ::std::ptr::null(),
         movie_frame.data[0], movie_frame.linesize[0],
         movie_frame.data[1], movie_frame.linesize[1],
@@ -319,8 +337,8 @@ fn texture_to_texture(
             std::slice::from_raw_parts(pixels.as_ptr().offset(offset1), uv_plane_size as _),
             (info.width / 2) as _,
         ).expect("failed to update yuv texture");
-        let debug = ::std::slice::from_raw_parts(pixels.as_ptr().offset(0), 1024);
-        dbg!(&debug);
+        // let debug = ::std::slice::from_raw_parts(pixels.as_ptr().offset(0), 1024);
+        // dbg!(&debug);
         SDL_UnlockTexture((*src_texture).raw() as *mut _);
     };
     Ok(())
@@ -332,6 +350,21 @@ fn blit_texture(
 ) -> Result<(), String> {
     canvas.copy(texture, None, None).unwrap();
     Ok(())
+}
+
+unsafe fn set_sdl_yuv_conversion_mode(frame: *const ffi::AVFrame)
+{
+    let mut mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_AUTOMATIC;
+    if !frame.is_null() && ((*frame).format == ffi::AVPixelFormat_AV_PIX_FMT_YUV420P || (*frame).format == ffi::AVPixelFormat_AV_PIX_FMT_YUV422P || (*frame).format == ffi::AVPixelFormat_AV_PIX_FMT_UYVY422) {
+        if (*frame).color_range == ffi::AVColorRange_AVCOL_RANGE_JPEG {
+            mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_JPEG;
+        } else if (*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_BT709 {
+            mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_BT709;
+        } else if ((*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_BT470BG || (*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_SMPTE170M) {
+            mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_BT601;
+        }
+    }
+    sdl2::sys::SDL_SetYUVConversionMode(mode); /* FIXME: no support for linear transfer */
 }
 
 fn fill_frame_with_memcpy(frame: &mut ffi::AVFrame, buffer: *const u8, len: usize, i: i64) {
