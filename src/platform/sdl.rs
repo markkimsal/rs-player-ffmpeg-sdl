@@ -453,29 +453,39 @@ fn fill_frame_with_pattern(dest_frame: &mut ffi::AVFrame, i: i64) {
     }
 
 unsafe fn texture_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std::sync::mpsc::SyncSender<RecordFrameWrapper>>, i: i64, event_pump: &sdl2::EventPump) {
-}
-
-unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std::sync::mpsc::SyncSender<RecordFrameWrapper>>, i: i64) {
     if !subsystem.is_recording {
         return
     }
+    // let mut size = SDL_Point { x: 0, y: 0 };
+    // let mut format:u32 = 0;
+    // let rect = sdl2::sys::SDL_QueryTexture(
+    //     src_texture.raw(),
+    //     // sdl2::sys::SDL_PixelFormatEnum::SDL_PIXELFORMAT_IYUV as _,
+    //     &mut format as _,
+    //     std::ptr::null_mut(),
+    //     &mut size.x as _,
+    //     &mut size.y as _,
+    // );
+    // dest_frame.width = size.x;
+    // dest_frame.height = size.y;
+}
+
+unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std::sync::mpsc::SyncSender<RecordFrameWrapper>>, i: i64) {
+
+    let screen_size = subsystem.canvas.window().size();
     let dest_frame =
         ffi::av_frame_alloc().as_mut()
         .expect("failed to allocated memory for AVFrame");
 
-    dest_frame.width = 1280;
-    dest_frame.height = 720;
+    dest_frame.width  = screen_size.0 as _;
+    dest_frame.height = screen_size.1 as _;
     dest_frame.format = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
     dest_frame.time_base = ffi::AVRational { num: 1, den: 25 };
     let ret = ffi::av_frame_get_buffer(dest_frame, 0);
 
     dest_frame.pts = i;
 
-    // we don't need alignment
-    // let n_units = (*dest_frame.buf[0]).size;
     let n_units = dest_frame.width * dest_frame.height * 3 / 2;
-
-    // let mut aligned: Vec<AlignedBytes> = Vec::with_capacity(n_units as _);
     let mut aligned: Vec<u8> = Vec::with_capacity(n_units as _);
     let aligned = aligned.as_mut_slice();
 
