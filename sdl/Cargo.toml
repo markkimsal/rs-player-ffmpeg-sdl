@@ -1,15 +1,8 @@
 [package]
-name = "rs-player-ffmpeg-sdl"
+name = "sdl"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-name = "rsplayer"
-path = "src/lib.rs"
-crate-type   = ["rlib", "cdylib"]
-
-[workspace]
-members = ["sdl"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -20,3 +13,4 @@ clap = { version = "4.0", features = ["derive"] }
 sdl2 = "^0.35.2"
 colog = "^1.3.0"
 log = "0.4.22"
+rs-player-ffmpeg-sdl = { path = "../" }
