@@ -22,18 +22,6 @@ use crate::movie_state::MovieState;
 #[cfg_attr(target_os="linux", path="platform/sdl.rs")]
 mod platform;
 
-// #[path="filter.rs"]
-// mod filter;
-// fn rotation_filter_init() -> crate::filter::RotateFilter {
-//     unsafe {
-//         crate::filter::RotateFilter {
-//             filter_graph: ffi::avfilter_graph_alloc(),
-//             buffersink_ctx: std::ptr::null_mut(),
-//             buffersrc_ctx:  std::ptr::null_mut(),
-//         }
-//     }
-// }
-
 #[no_mangle]
 pub unsafe extern "C" fn new_movie_state() -> *mut MovieState {
     Box::into_raw(Box::new(MovieState::new())) as *mut MovieState

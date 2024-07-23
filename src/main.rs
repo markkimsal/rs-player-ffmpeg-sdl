@@ -1,5 +1,4 @@
 use rsplayer::analyzer_state::AnalyzerContext;
-use rsplayer::movie_state::MovieState;
 use rsplayer::app::{open_movie, play_movie};
 
 mod movie_state;
