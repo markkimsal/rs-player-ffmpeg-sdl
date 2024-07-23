@@ -154,9 +154,6 @@ unsafe fn add_stream(
             /* resolution must be a multiple of two */
             c.width = width as _;
             c.height = height as _;
-            /* frames per second */
-            c.time_base = ffi::AVRational{ num: 1, den: 25};
-            c.framerate = ffi::AVRational{ num: 25, den: 1};
 
             c.gop_size = 10;
             c.max_b_frames = 1;
@@ -165,7 +162,9 @@ unsafe fn add_stream(
             // c.profile = ffi::FF_PROFILE_H264_MAIN as _;
             ost.st.as_mut().unwrap().time_base = ffi::AVRational{num: 1, den: 25};
             // TODO: set as a reference to ost.st?
-            c.time_base = ffi::AVRational{num: 1, den: 25};
+            /* frames per second */
+            c.time_base = ffi::AVRational{ num: 1, den: 25};
+            c.framerate = ffi::AVRational{ num: 25, den: 1};
         }
         _ => {
             error!("📽 📽  unknnown codec type: {:?}", (*(*codec)).type_);

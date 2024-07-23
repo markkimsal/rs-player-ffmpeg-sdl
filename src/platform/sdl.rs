@@ -1,17 +1,21 @@
 #![allow(unused_variables, dead_code, unused_imports)]
 use std::{io::Write, ops::Deref, ptr::{slice_from_raw_parts, slice_from_raw_parts_mut}, sync::mpsc::{Sender, SyncSender}, thread::JoinHandle, time::Duration};
 
-use log::debug;
+use log::{
+    info,
+    debug
+};
 use rusty_ffmpeg::ffi::{self, av_frame_unref};
 
 use sdl2::{
-    event::Event,
-    Error,
-    keyboard::Keycode,
-    pixels::{Color, PixelFormatEnum},
-    render::{Canvas, Texture, TextureAccess},
-    sys::SDL_UpdateYUVTexture,
+    event::Event, keyboard::Keycode, pixels::{Color, PixelFormatEnum}, render::{Canvas, Texture, TextureAccess},
+    sys::{
+        SDL_LockTexture,
+        SDL_UnlockTexture,
+        SDL_UpdateYUVTexture
+    },
     video::Window,
+    Error,
     Sdl
 };
 
@@ -25,7 +29,7 @@ pub struct SdlSubsystemCtx {
 }
 
 struct AlignedBytes([u8; 3]);
-pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<SdlSubsystemCtx, Error> {
+pub unsafe fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<SdlSubsystemCtx, Error> {
     let sdl_ctx = sdl2::init().unwrap();
     let video_subsystem = match sdl_ctx.video() {
         Ok(video_subsystem) => video_subsystem,
@@ -35,15 +39,23 @@ pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<Sd
         }
     };
 
+    #[allow(unused_mut)]
+    let mut window_flags: u32 = 0;
+    // window_flags |= sdl2::sys::SDL_WindowFlags::SDL_WINDOW_BORDERLESS as u32;
     let window = video_subsystem.window("rs-player-ffmpeg-sdl2", default_width, default_height)
         .resizable()
         .position_centered()
-        .set_window_flags(sdl2::sys::SDL_SWSURFACE)
+        .set_window_flags(window_flags)
+        .borderless()
         .build()
         .unwrap();
+
+    // let canvas = sdl2::sys::SDL_CreateRenderer(window.raw(), -1, sdl2::sys::SDL_RendererFlags::SDL_RENDERER_ACCELERATED);
+    // let canvas = Canvas{ target: window.raw(), context: 1, default_pixel_format: todo!()  }
     let canvas = window
         .into_canvas()
-        .software()
+        // .software()
+        .accelerated()
         .build()
         .unwrap();
 
@@ -51,7 +63,7 @@ pub fn init_subsystem<'sdl>(default_width: u32, default_height: u32) ->Result<Sd
         sdl_ctx,
         canvas,
         is_recording: false
-    })
+})
 }
 
 pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieState>, subsystem: &mut SdlSubsystemCtx, tx: std::sync::mpsc::Sender<String>) {
@@ -74,21 +86,48 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
     // }
     let mut texture: Texture = texture_creator.create_texture(
         Some(PixelFormatEnum::IYUV),
-        TextureAccess::Streaming,
+        TextureAccess::Target,
         textw,
         texth
     ).unwrap();
-    // let mut texture = subsystem.canvas.su;
- 
-    // let mut texture: SDL_SW_YUVTexture = sdl2::sys::SDL_SW_CreateYUVTexture(PixelFormatEnum::IYUV, textw, texth).unwrap();
+
+    let mut movie_texture: Texture = texture_creator.create_texture(
+        Some(PixelFormatEnum::IYUV),
+        TextureAccess::Target,
+        textw,
+        texth
+    ).unwrap();
+
+    let mut draw_texture: Texture = texture_creator.create_texture(
+        Some(PixelFormatEnum::IYUV),
+        TextureAccess::Target,
+        textw,
+        texth
+    ).unwrap();
+
+     let mut ui_texture: Texture = texture_creator.create_texture(
+        Some(PixelFormatEnum::IYUV),
+        TextureAccess::Target,
+        textw,
+        texth
+    ).unwrap();
+
+
+
     let _ = sdl2::video::drivers()
         .map(|d: &'static str| {eprintln!("driver {}", d);});
-    dbg!(sdl2::video::drivers().len());
+
+    info!("available video drivers: ");
     let mut iter = sdl2::video::drivers();
-    eprintln!("iter: {:?}", iter.next());
-    eprintln!("iter: {:?}", iter.next());
-    eprintln!("iter: {:?}", iter.next());
-    eprintln!("iter: {:?}", iter.next());
+    iter.for_each(|i|
+        info!(" * {}", iter.next().unwrap())
+    );
+
+    info!("available audio drivers: ");
+    let _ = sdl2::audio::drivers()
+        .for_each(|d: &'static str| info!(" * {}", d));
+        // .map(|d: &'static str| info!(" * audio driver: {}", d));
+
     let info = subsystem.canvas.deref().info();
     dbg!(&info);
 
@@ -161,10 +200,11 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
             }
         }
         // The rest of the game loop goes here...
+        draw_ui(&mut subsystem.canvas, &mut ui_texture, subsystem.is_recording);
 
         if movie_state.is_paused() == true {
             std::thread::yield_now();
-            screen_cap(subsystem, &mut record_tx, i, &event_pump);
+            screen_cap(subsystem, &mut record_tx, i);
             continue;
         }
 
@@ -220,8 +260,32 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
                 ffi::av_buffersink_get_frame_flags(out_vfilter.ptr, dest_frame, 0);
 
 
-                blit_frame(
+                frame_to_texture(
                     dest_frame,
+                    &mut texture,
+                ).unwrap_or_default();
+
+                // texture_to_texture(
+                //     &mut movie_texture,
+                //     &mut subsystem.canvas,
+                //     &mut texture,
+                // ).unwrap_or_default();
+
+    composite(
+        &mut subsystem.canvas,
+        &mut texture,
+        &mut ui_texture,
+    );
+    // SDL_UpdateYUVTexture(
+    //     texture.raw(), ::std::ptr::null(),
+    //     dest_frame.data[0], dest_frame.linesize[0],
+    //     dest_frame.data[1], dest_frame.linesize[1],
+    //     dest_frame.data[2], dest_frame.linesize[2],
+    // );
+
+    // canvas.copy(&streaming_texture, None, None).unwrap();
+ 
+                blit_texture(
                     &mut subsystem.canvas,
                     &mut texture,
                 ).unwrap_or_default();
@@ -236,7 +300,7 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
         last_clock = ffi::av_gettime_relative();
         subsystem.canvas.present();
 
-        screen_cap(subsystem, &mut record_tx, i, &event_pump);
+        screen_cap(subsystem, &mut record_tx, i);
         std::thread::yield_now();
     }
     ffi::av_free(dest_frame.opaque);
@@ -254,31 +318,76 @@ fn record_frame(
     Ok(())
 }
 
-fn blit_frame(
-    dest_frame: &mut ffi::AVFrame,
+fn frame_to_texture(
+    movie_frame: &mut ffi::AVFrame,
+    texture: &mut Texture,
+) -> Result<(), String> {
+    unsafe {
+        set_sdl_yuv_conversion_mode(movie_frame);
+        SDL_UpdateYUVTexture(
+        texture.raw(), ::std::ptr::null(),
+        movie_frame.data[0], movie_frame.linesize[0],
+        movie_frame.data[1], movie_frame.linesize[1],
+        movie_frame.data[2], movie_frame.linesize[2],
+    );
+ };
+    Ok(())
+}
+
+fn texture_to_texture(
+    src_texture: &mut Texture,
+    canvas: &mut Canvas<Window>,
+    dest_texture: &mut Texture,
+) -> Result<(), String> {
+
+    let info = src_texture.query();
+    let n_units = info.width * info.height * 3 / 2;
+    let mut pixels: Vec<u8> = Vec::with_capacity(n_units as _);
+    let pixels = pixels.as_mut_slice();
+
+    let offset0: isize = info.width as isize * info.height as isize;
+    let uv_plane_size: isize = (info.width / 2) as isize * (info.height as isize / 2);
+    let offset1: isize = offset0 + uv_plane_size;
+ 
+    unsafe {
+        SDL_LockTexture((*src_texture).raw() as *mut _, std::ptr::null(), pixels.as_mut_ptr() as _, info.width as _);
+        dest_texture.update_yuv(
+            None,
+            std::slice::from_raw_parts(pixels.as_ptr().offset(0), offset0 as _),
+            info.width as _,
+            std::slice::from_raw_parts(pixels.as_ptr().offset(offset0), uv_plane_size as _),
+            (info.width / 2) as _,
+            std::slice::from_raw_parts(pixels.as_ptr().offset(offset1), uv_plane_size as _),
+            (info.width / 2) as _,
+        ).expect("failed to update yuv texture");
+        // let debug = ::std::slice::from_raw_parts(pixels.as_ptr().offset(0), 1024);
+        // dbg!(&debug);
+        SDL_UnlockTexture((*src_texture).raw() as *mut _);
+    };
+    Ok(())
+}
+
+fn blit_texture(
     canvas: &mut Canvas<Window>,
     texture: &mut Texture,
 ) -> Result<(), String> {
-
-    // let new_frame = dest_frame;
-    // unsafe { SDL_UpdateTexture(
-    //     texture.raw(), std::ptr::null(),
-    //     (*dest_frame).data[0] as _, (*dest_frame).linesize[0] as _
-    // ) };
-    // unsafe { SDL_UpdateTexture(
-    //     texture.raw(), std::ptr::null(),
-    //     (new_frame).data[0] as _, (new_frame).linesize[0] as _
-    // ) };
-
-    // SDL cannot handle YUV(J)420P
-    unsafe { SDL_UpdateYUVTexture(
-        texture.raw(), ::std::ptr::null(),
-        dest_frame.data[0], dest_frame.linesize[0],
-        dest_frame.data[1], dest_frame.linesize[1],
-        dest_frame.data[2], dest_frame.linesize[2],
-    ) };
     canvas.copy(texture, None, None).unwrap();
     Ok(())
+}
+
+unsafe fn set_sdl_yuv_conversion_mode(frame: *const ffi::AVFrame)
+{
+    let mut mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_AUTOMATIC;
+    if !frame.is_null() && ((*frame).format == ffi::AVPixelFormat_AV_PIX_FMT_YUV420P || (*frame).format == ffi::AVPixelFormat_AV_PIX_FMT_YUV422P || (*frame).format == ffi::AVPixelFormat_AV_PIX_FMT_UYVY422) {
+        if (*frame).color_range == ffi::AVColorRange_AVCOL_RANGE_JPEG {
+            mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_JPEG;
+        } else if (*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_BT709 {
+            mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_BT709;
+        } else if (*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_BT470BG || (*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_SMPTE170M {
+            mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_BT601;
+        }
+    }
+    sdl2::sys::SDL_SetYUVConversionMode(mode); /* FIXME: no support for linear transfer */
 }
 
 fn fill_frame_with_memcpy(frame: &mut ffi::AVFrame, buffer: *const u8, len: usize, i: i64) {
@@ -366,42 +475,46 @@ fn fill_frame_with_pattern(dest_frame: &mut ffi::AVFrame, i: i64) {
         dest_frame.colorspace = ffi::AVColorSpace_AVCOL_SPC_BT709;
     }
 
-unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std::sync::mpsc::SyncSender<RecordFrameWrapper>>, i: i64, event_pump: &sdl2::EventPump) {
-    if subsystem.is_recording {
-    // let surface = subsystem.canvas.window().surface(&event_pump).unwrap();
-    // sdl2::sys::SDL_LockSurface(surface.raw());
-    // let mut pixels: *mut std::os::raw::c_void = std::ptr::null_mut();
-    // let pixel_ptr: *mut *mut i32 = &mut pixels;
-    // let pixel_ptr: *mut *mut std::os::raw::c_void = &mut pixels;
-    // let pixels = std::ptr::null_mut();
+unsafe fn texture_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std::sync::mpsc::SyncSender<RecordFrameWrapper>>, i: i64, event_pump: &sdl2::EventPump) {
+    if !subsystem.is_recording {
+        return
+    }
+    // let mut size = SDL_Point { x: 0, y: 0 };
+    // let mut format:u32 = 0;
+    // let rect = sdl2::sys::SDL_QueryTexture(
+    //     src_texture.raw(),
+    //     // sdl2::sys::SDL_PixelFormatEnum::SDL_PIXELFORMAT_IYUV as _,
+    //     &mut format as _,
+    //     std::ptr::null_mut(),
+    //     &mut size.x as _,
+    //     &mut size.y as _,
+    // );
+    // dest_frame.width = size.x;
+    // dest_frame.height = size.y;
+}
+
+unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std::sync::mpsc::SyncSender<RecordFrameWrapper>>, i: i64) {
+    if !subsystem.is_recording {
+        return
+    }
+
+    let screen_size = subsystem.canvas.window().size();
     let dest_frame =
         ffi::av_frame_alloc().as_mut()
         .expect("failed to allocated memory for AVFrame");
 
-    dest_frame.width = 1280;
-    dest_frame.height = 720;
+    dest_frame.width  = screen_size.0 as _;
+    dest_frame.height = screen_size.1 as _;
     dest_frame.format = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
     dest_frame.time_base = ffi::AVRational { num: 1, den: 25 };
-    // let ret = ffi::av_image_alloc(&mut dest_frame.data as *mut _, &mut dest_frame.linesize as *mut _, dest_frame.width, dest_frame.height, dest_frame.format, 16);
-    // let ret = ffi::av_image_alloc(&mut dest_frame.data[1], &mut dest_frame.linesize[1], dest_frame.width, dest_frame.height, dest_frame.format, 16);
-    // let ret = ffi::av_image_alloc(&mut dest_frame.data[2], &mut dest_frame.linesize[2], dest_frame.width, dest_frame.height, dest_frame.format, 16);
     let ret = ffi::av_frame_get_buffer(dest_frame, 0);
 
     dest_frame.pts = i;
 
-    // we don't need alignment
-    // let n_units = (*dest_frame.buf[0]).size;
     let n_units = dest_frame.width * dest_frame.height * 3 / 2;
-
-    // let mut aligned: Vec<AlignedBytes> = Vec::with_capacity(n_units as _);
     let mut aligned: Vec<u8> = Vec::with_capacity(n_units as _);
     let aligned = aligned.as_mut_slice();
 
-    // let srf = sdl2::sys::SDL_CreateRGBSurface(0, 1280, 720, 24, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
-    // let srf = subsystem.canvas.window().surface(event_pump).unwrap();
-    // let mut pitch: usize = srf.pixel_format().raw().as_mut().unwrap().BytesPerPixel as usize;
-    // pitch *= srf.width() as usize;
-    // dbg!(pitch);
     // let pitch = (1280 * sdl2::pixels::SDL_BYTESPERPIXEL(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P) as _);
 
     let ret = sdl2::sys::SDL_RenderReadPixels(
@@ -411,12 +524,9 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
         sdl2::sys::SDL_PixelFormatEnum::SDL_PIXELFORMAT_IYUV as _,
         // (dest_frame.buf[0].as_mut().unwrap().buffer) as _,
         aligned.as_mut_ptr() as *mut _,
-        // srf.as_mut().unwrap().pixels as *mut _,
-        // srf.as_mut().unwrap().pitch as _,
         // dest_frame.data[0] as *mut _,
         // pitch as _,
         dest_frame.width,
-        // subsystem.canvas.window().surface(&event_pump).unwrap().pitch() as _,
         // 1280 *  3 / 2,
     );
 
@@ -424,28 +534,100 @@ unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std
     fill_frame_with_memcpy(dest_frame, aligned.as_ptr(), n_units as usize, i);
     // write_out_buffer(dest_frame.data[0], n_units as _, "dest_frame.yuv");
     // write_out_buffer(aligned.as_ptr(), n_units as _, "dest_frame.yuv");
-    // dest_frame.data[0] = ::std::slice::from_raw_parts_mut(aligned.as_mut_ptr() as *mut u8, 1280 * 720 * 3 / 2);
-    // dest_frame.data[0] = aligned.as_mut_ptr() as *mut _;
-    // dest_frame.data[0] = (aligned).as_mut_ptr() as *mut _;
-    // dest_frame.data[0] = ::std::ptr::addr_of_mut!(aligned) as *mut u8;
 
 
-    // let dfbuf = dest_frame.buf[0].as_mut().unwrap();
-    // dest_frame.data[0] = ::std::ptr::addr_of!(aligned) as *mut u8;
-    // dest_frame.buf[0] = ::std::ptr::addr_of!(aligned) as *mut _;
-    // let x = aligned[0..1280];
-    // dest_frame.data[0] = ::std::slice::from_raw_parts(
-    //     ::std::ptr::addr_of_mut!(aligned) as *mut u8,
-    //     1280
-    // ) as *mut _;
-
-    // let buf = dest_frame.buf[0].as_mut().unwrap();
-    // buf.buffer = ::std::ptr::addr_of_mut!(*pixels) as _;
-    //  = (::std::ptr::addr_of_mut!(pixels) as *mut _);
-    // dest_frame.data[1] = yuvdata.as_ref().unwrap()[1];
-    // dest_frame.data[2] = yuvdata.as_ref().unwrap()[2];
     let _ = record_frame(dest_frame, &record_tx);
     // ::std::thread::sleep(Duration::from_secs_f64(0.15));
     // av_frame_unref(dest_frame as *mut _);
+}
+
+unsafe fn draw_ui(
+    renderer: &mut Canvas<Window>,
+    tex2: &mut Texture,
+    is_recording: bool,
+) {
+    sdl2::sys::SDL_SetRenderTarget(renderer.raw(), tex2.raw());
+    sdl2::sys::SDL_SetRenderDrawBlendMode(renderer.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_NONE);
+    sdl2::sys::SDL_SetRenderDrawColor(renderer.raw(), 0, 0, 0, 0);
+    // sdl2::sys::SDL_RenderFillRect(renderer.raw(), std::ptr::null());
+    sdl2::sys::SDL_RenderClear(renderer.raw());
+
+    sdl2::sys::SDL_SetTextureBlendMode(tex2.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_BLEND);
+
+    // sdl2::sys::SDL_RenderClear(renderer.raw());
+    if !is_recording {
+        sdl2::sys::SDL_SetRenderTarget(
+            renderer.raw(),
+            std::ptr::null_mut(),
+        );
+        return;
     }
+
+    let dest_rect = sdl2::sys::SDL_Rect {
+        x: 20,
+        y: 20,
+        w: 60,
+        h: 60,
+    };
+
+    sdl2::sys::SDL_SetTextureBlendMode(tex2.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_BLEND);
+    sdl2::sys::SDL_SetTextureAlphaMod(tex2.raw(), 170 as u8);
+    sdl2::sys::SDL_SetRenderDrawColor(
+        renderer.raw(),
+        202,
+        22,
+        22,
+        255,
+    );
+    sdl2::sys::SDL_RenderClear(
+        renderer.raw()
+    );
+
+    sdl2::sys::SDL_RenderCopy(
+        renderer.raw(),
+        tex2.raw(),
+        std::ptr::null(),
+        std::ptr::null(),
+    );
+    sdl2::sys::SDL_SetRenderTarget(
+        renderer.raw(),
+        std::ptr::null_mut(),
+    );
+
+}
+
+unsafe fn composite(
+    renderer: &mut Canvas<Window>,
+    tex: &mut Texture,
+    tex2: &mut Texture
+) {
+
+    sdl2::sys::SDL_SetRenderTarget(
+        renderer.raw(),
+        tex.raw(),
+    );
+    let dest_rect = sdl2::sys::SDL_Rect {
+        x: 30,
+        y: 30,
+        w: 60,
+        h: 60,
+    };
+    sdl2::sys::SDL_SetRenderDrawBlendMode(renderer.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_BLEND);
+    // sdl2::sys::SDL_SetTextureBlendMode(tex.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_BLEND);
+    // sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), 25 as u8);
+    // sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), 70 as u8);
+    sdl2::sys::SDL_RenderCopy(
+        renderer.raw(),
+        tex2.raw(),
+        std::ptr::null(),
+        &dest_rect,
+    );
+
+    sdl2::sys::SDL_SetRenderTarget(
+        renderer.raw(),
+        std::ptr::null_mut(),
+    );
+
+    // sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), 255 as u8);
+    // sdl2::sys::SDL_SetTextureBlendMode(tex.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_NONE);
 }
