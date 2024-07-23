@@ -86,7 +86,7 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
     // }
     let mut texture: Texture = texture_creator.create_texture(
         Some(PixelFormatEnum::IYUV),
-        TextureAccess::Streaming,
+        TextureAccess::Target,
         textw,
         texth
     ).unwrap();
@@ -104,6 +104,15 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
         textw,
         texth
     ).unwrap();
+
+     let mut ui_texture: Texture = texture_creator.create_texture(
+        Some(PixelFormatEnum::IYUV),
+        TextureAccess::Target,
+        textw,
+        texth
+    ).unwrap();
+
+
 
     let _ = sdl2::video::drivers()
         .map(|d: &'static str| {eprintln!("driver {}", d);});
@@ -191,6 +200,7 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
             }
         }
         // The rest of the game loop goes here...
+        draw_ui(&mut subsystem.canvas, &mut ui_texture, subsystem.is_recording);
 
         if movie_state.is_paused() == true {
             std::thread::yield_now();
@@ -252,7 +262,6 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
 
                 frame_to_texture(
                     dest_frame,
-                    &mut subsystem.canvas,
                     &mut texture,
                 ).unwrap_or_default();
 
@@ -262,6 +271,20 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
                 //     &mut texture,
                 // ).unwrap_or_default();
 
+    composite(
+        &mut subsystem.canvas,
+        &mut texture,
+        &mut ui_texture,
+    );
+    // SDL_UpdateYUVTexture(
+    //     texture.raw(), ::std::ptr::null(),
+    //     dest_frame.data[0], dest_frame.linesize[0],
+    //     dest_frame.data[1], dest_frame.linesize[1],
+    //     dest_frame.data[2], dest_frame.linesize[2],
+    // );
+
+    // canvas.copy(&streaming_texture, None, None).unwrap();
+ 
                 blit_texture(
                     &mut subsystem.canvas,
                     &mut texture,
@@ -297,7 +320,6 @@ fn record_frame(
 
 fn frame_to_texture(
     movie_frame: &mut ffi::AVFrame,
-    canvas: &mut Canvas<Window>,
     texture: &mut Texture,
 ) -> Result<(), String> {
     unsafe {
@@ -307,7 +329,8 @@ fn frame_to_texture(
         movie_frame.data[0], movie_frame.linesize[0],
         movie_frame.data[1], movie_frame.linesize[1],
         movie_frame.data[2], movie_frame.linesize[2],
-    ) };
+    );
+ };
     Ok(())
 }
 
@@ -360,7 +383,7 @@ unsafe fn set_sdl_yuv_conversion_mode(frame: *const ffi::AVFrame)
             mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_JPEG;
         } else if (*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_BT709 {
             mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_BT709;
-        } else if ((*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_BT470BG || (*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_SMPTE170M) {
+        } else if (*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_BT470BG || (*frame).colorspace == ffi::AVColorPrimaries_AVCOL_PRI_SMPTE170M {
             mode = sdl2::sys::SDL_YUV_CONVERSION_MODE::SDL_YUV_CONVERSION_BT601;
         }
     }
@@ -471,6 +494,9 @@ unsafe fn texture_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<st
 }
 
 unsafe fn screen_cap(subsystem: &mut SdlSubsystemCtx, record_tx: &mut Option<std::sync::mpsc::SyncSender<RecordFrameWrapper>>, i: i64) {
+    if !subsystem.is_recording {
+        return
+    }
 
     let screen_size = subsystem.canvas.window().size();
     let dest_frame =
@@ -520,22 +546,15 @@ unsafe fn draw_ui(
     tex2: &mut Texture,
     is_recording: bool,
 ) {
-    sdl2::sys::SDL_SetRenderTarget(
-        renderer.raw(),
-        tex2.raw()
-    );
+    sdl2::sys::SDL_SetRenderTarget(renderer.raw(), tex2.raw());
+    sdl2::sys::SDL_SetRenderDrawBlendMode(renderer.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_NONE);
+    sdl2::sys::SDL_SetRenderDrawColor(renderer.raw(), 0, 0, 0, 0);
+    // sdl2::sys::SDL_RenderFillRect(renderer.raw(), std::ptr::null());
+    sdl2::sys::SDL_RenderClear(renderer.raw());
 
-    sdl2::sys::SDL_SetRenderDrawColor(
-        renderer.raw(),
-        0,
-        0,
-        0,
-        0,
-    );
+    sdl2::sys::SDL_SetTextureBlendMode(tex2.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_BLEND);
 
-    sdl2::sys::SDL_RenderClear(
-        renderer.raw()
-    );
+    // sdl2::sys::SDL_RenderClear(renderer.raw());
     if !is_recording {
         sdl2::sys::SDL_SetRenderTarget(
             renderer.raw(),
@@ -550,6 +569,9 @@ unsafe fn draw_ui(
         w: 60,
         h: 60,
     };
+
+    sdl2::sys::SDL_SetTextureBlendMode(tex2.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_BLEND);
+    sdl2::sys::SDL_SetTextureAlphaMod(tex2.raw(), 170 as u8);
     sdl2::sys::SDL_SetRenderDrawColor(
         renderer.raw(),
         202,
@@ -565,7 +587,7 @@ unsafe fn draw_ui(
         renderer.raw(),
         tex2.raw(),
         std::ptr::null(),
-        &dest_rect,
+        std::ptr::null(),
     );
     sdl2::sys::SDL_SetRenderTarget(
         renderer.raw(),
@@ -590,9 +612,10 @@ unsafe fn composite(
         w: 60,
         h: 60,
     };
-
-    sdl2::sys::SDL_SetTextureBlendMode(tex2.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_BLEND);
-    sdl2::sys::SDL_SetTextureAlphaMod(tex2.raw(), 135 as u8);
+    sdl2::sys::SDL_SetRenderDrawBlendMode(renderer.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_BLEND);
+    // sdl2::sys::SDL_SetTextureBlendMode(tex.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_BLEND);
+    // sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), 25 as u8);
+    // sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), 70 as u8);
     sdl2::sys::SDL_RenderCopy(
         renderer.raw(),
         tex2.raw(),
@@ -604,4 +627,7 @@ unsafe fn composite(
         renderer.raw(),
         std::ptr::null_mut(),
     );
+
+    // sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), 255 as u8);
+    // sdl2::sys::SDL_SetTextureBlendMode(tex.raw(), sdl2::sys::SDL_BlendMode::SDL_BLENDMODE_NONE);
 }
