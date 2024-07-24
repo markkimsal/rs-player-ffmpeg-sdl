@@ -204,39 +204,38 @@ pub unsafe fn event_loop(
         for event in event_pump.poll_iter() {
             // println!("event: {:?}", event);
             match event {
-                Event::Quit { .. }
-                | Event::KeyDown {
-                    keycode: Some(Keycode::Escape),
-                    ..
-                } => {
+                Event::Quit { .. } => {
                     // keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
                     tx.send("quit".to_string()).unwrap();
                     break 'running;
-                }
-                Event::KeyDown {
-                    keycode: Some(Keycode::Space),
-                    ..
-                } => {
-                    tx.send("pause".to_string()).unwrap();
-                    analyzer_ctx.pause();
-                    // pause_packets.store(!pause_packets.load(std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
-                    // packet_thread.thread().unpark();
-                }
-                Event::KeyDown {
-                    keycode: Some(Keycode::R),
-                    ..
-                } => {
-                    match subsystem.is_recording {
-                        true => {
-                            tx.send("Stop recording".to_string()).unwrap();
-                            record_tx = None;
-                        }
-                        false => {
-                            tx.send("Start recording".to_string()).unwrap();
-                            record_tx = the_record_state.start_recording_thread();
+                },
+                Event::KeyDown{ .. } => {
+                    if let Event::KeyDown{keycode, ..} = event {
+                        match keycode {
+                            Some(Keycode::R) => {
+                                match subsystem.is_recording {
+                                    true => {
+                                        tx.send("Stop recording".to_string()).unwrap();
+                                        record_tx = None;
+                                    }
+                                    false => {
+                                        tx.send("Start recording".to_string()).unwrap();
+                                        record_tx = the_record_state.start_recording_thread();
+                                    }
+                                }
+                                subsystem.is_recording = !subsystem.is_recording;
+                            }
+                            Some(Keycode::Space) => {
+                                tx.send("pause".to_string()).unwrap();
+                                analyzer_ctx.pause();
+                            }
+                            Some(Keycode::Q) | Some(Keycode::Escape) => {
+                                tx.send("quit".to_string()).unwrap();
+                                break 'running;
+                            }
+                            _ => {}
                         }
                     }
-                    subsystem.is_recording = !subsystem.is_recording;
                 }
                 _ => {}
             }
