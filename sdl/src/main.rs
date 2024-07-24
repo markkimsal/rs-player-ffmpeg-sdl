@@ -265,36 +265,6 @@ pub unsafe fn event_loop(
             continue;
         }
 
-        // if let Some(pts) = movie_state.peek_frame_pts() {
-        //     // if last_pts == ffi::AV_NOPTS_VALUE {
-        //     //     let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
-        //     //     last_pts = pts * time_base.num as i64 / time_base.den as i64;
-        //     // }
-
-        //     // let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
-        //     let mut delay: f64 = (frame_rate.num as f64) / (frame_rate.den as f64);
-
-        //     if pts > last_pts && last_pts != ffi::AV_NOPTS_VALUE {
-        //         // println!("av_gettime_relative: {}", (ffi::av_gettime_relative() - last_clock ) );
-        //         // let mut delay:f64 = ( pts - last_pts ) as f64;
-        //         // let mut delay:f64 = ( pts ) as f64;
-        //         delay *= (pts - last_pts) as f64;
-        //         debug!("pts: {}", delay);
-        //         {
-        //             // delay *= (time_base.num as f64) / (time_base.den as f64);
-        //         }
-        //         debug!("delay 1: {}", delay);
-        //         delay -= (ffi::av_gettime_relative() - last_clock) as f64 / 100_000.;
-        //     }
-        //     // println!("av_gettime_relative: {}", (ffi::av_gettime_relative() - last_clock ) as f64 / 100_000. );
-        //     if delay > 0. {
-        //         debug!("pts: {}", delay);
-
-        //         // println!("delay 2: {}", delay );
-        //         ::std::thread::sleep(Duration::from_secs_f64(1. / delay));
-        //     }
-        // }
-
 
         if let Some(dest_frame) = analyzer_ctx.dequeue_frame() {
             // let dest_frame = dest_frame.ptr;
