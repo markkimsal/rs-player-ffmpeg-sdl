@@ -22,6 +22,7 @@ pub struct MovieState {
     pub vgraph: Mutex<FilterGraphWrapper>,
     pub video_frame_rate: ffi::AVRational,
     pub last_pts: i64,
+    pub last_pts_time: i64,
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
@@ -65,6 +66,7 @@ impl MovieState {
             vgraph: Mutex::new(FilterGraphWrapper { ptr: vgraph }),
             video_frame_rate: ffi::AVRational { num: 1, den: 60 },
             last_pts: ffi::AV_NOPTS_VALUE,
+            last_pts_time: 0,
         }
     }
 }
