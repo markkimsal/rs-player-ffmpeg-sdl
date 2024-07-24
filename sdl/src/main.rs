@@ -77,7 +77,6 @@ pub unsafe fn init_subsystem<'sdl>(
 }
 
 fn main() {
-    println!("Hello, world!");
     let mut clog = colog::default_builder();
     clog.filter(None, log::LevelFilter::Info);
     clog.init();
@@ -116,18 +115,8 @@ pub unsafe fn event_loop(
     subsystem.canvas.present();
     let texture_creator = subsystem.canvas.texture_creator();
 
-    // let movie_state = analyzer_ctx.movie_list.get_mut(0).unwrap();
-    let textw: u32 = 1280;
-    let texth: u32 = 720;
-    // {
-    //     let codec_context = unsafe { movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap() };
-    //     textw = codec_context.width as u32;
-    //     texth = codec_context.height as u32;
-    // }
-    // let mut lock = unsafe{movie_state.video_ctx.try_lock()};
-    // if let (textw: u32, texth: u32) = unsafe{movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap()} {
-    //     (codec_context.width as u32, codec_context.height as u32)
-    // }
+    let textw: u32 = subsystem.canvas.viewport().width() as u32;
+    let texth: u32 = subsystem.canvas.viewport().height() as u32;
     let mut texture: Texture = texture_creator
         .create_texture(
             Some(PixelFormatEnum::IYUV),
