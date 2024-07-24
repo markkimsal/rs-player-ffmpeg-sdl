@@ -20,6 +20,8 @@ pub struct MovieState {
     pub in_vfilter: Mutex<FilterContextWrapper>,   // the first filter in the video chain
     pub out_vfilter: Mutex<FilterContextWrapper>,   // the last filter in the video chain
     pub vgraph: Mutex<FilterGraphWrapper>,
+    pub video_frame_rate: ffi::AVRational,
+    pub last_pts: i64,
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
@@ -61,6 +63,8 @@ impl MovieState {
             in_vfilter: Mutex::new(FilterContextWrapper{ ptr:std::ptr::null_mut() }),
             out_vfilter: Mutex::new(FilterContextWrapper { ptr: std::ptr::null_mut() }),
             vgraph: Mutex::new(FilterGraphWrapper { ptr: vgraph }),
+            video_frame_rate: ffi::AVRational { num: 1, den: 60 },
+            last_pts: ffi::AV_NOPTS_VALUE,
         }
     }
 }

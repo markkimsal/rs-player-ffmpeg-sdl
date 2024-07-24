@@ -3,6 +3,7 @@ use std::ffi::CStr;
 use std::ffi::CString;
 use std::ptr;
 use std::ptr::NonNull;
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -98,6 +99,11 @@ pub unsafe extern "C" fn open_movie(analyzer_context: &mut AnalyzerContext, file
                     codec_parameters_ptr = local_codec_params;
                     time_base_den = (*stream).time_base.den;
                     time_base_num = (*stream).time_base.num;
+                    video_state.video_frame_rate = ffi::av_guess_frame_rate(
+                        format_ctx.as_mut().unwrap(),
+                        video_state.video_stream.lock().unwrap().ptr,
+                        ::std::ptr::null_mut(),
+                    );
                 }
 
                 println!(
@@ -238,7 +244,7 @@ unsafe impl Send for Storage<'_>{}
 
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
- pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) {
+pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sender<String> {
 
     let analyzer_ctx = analyzer_ctx.as_mut().unwrap();
     let movie_state = analyzer_ctx.movie_list.get_mut(0).unwrap();
@@ -265,11 +271,6 @@ unsafe impl Send for Storage<'_>{}
     // let arc_video_ctx = std::sync::Arc::clone(&movie_state.video_ctx);
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let pause_packets = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    std::thread::spawn(move|| {
-        for msg in rx {
-            debug!("🦀🦀 received message: {}", msg);
-        }
-    });
     let movie_state_arc    = std::sync::Arc::new(movie_state);
     let movie_state1   = std::sync::Arc::clone(&movie_state_arc);
 
@@ -335,21 +336,19 @@ unsafe impl Send for Storage<'_>{}
         ffi::av_frame_free(frame as *mut _ as *mut _);
     });
 
-
-    let mut subsystem = match platform::init_subsystem(window_width, window_height) {
-        Ok(s) => s,
-        Err(e) => {
-            keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
-            decode_thread.join().unwrap();
-            packet_thread.join().unwrap();
-            return;
+    std::thread::spawn(move || {
+        for msg in rx {
+            debug!("🦀🦀 received message: {}", msg);
+            if msg == "quit" {
+                keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                decode_thread.join().unwrap();
+                packet_thread.join().unwrap();
+                break;
+            }
         }
-    };
-    platform::event_loop(movie_state_arc.clone(), &mut subsystem, tx);
-
-    keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
-    decode_thread.join().unwrap();
-    packet_thread.join().unwrap();
+        info!("🦀🦀 done");
+    });
+    tx
 }
 
 fn decode_packet(
