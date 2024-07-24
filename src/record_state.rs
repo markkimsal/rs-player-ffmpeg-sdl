@@ -150,7 +150,7 @@ unsafe fn add_stream(
         ffi::AVMediaType_AVMEDIA_TYPE_VIDEO => {
             c.codec_type = ffi::AVMediaType_AVMEDIA_TYPE_VIDEO;
             /* put sample parameters */
-            c.bit_rate = 40000;
+            c.bit_rate = 400000;
             /* resolution must be a multiple of two */
             c.width = width as _;
             c.height = height as _;
