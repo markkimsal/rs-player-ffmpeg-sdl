@@ -1,7 +1,6 @@
 #![allow(unused_variables, dead_code)]
 use std::{
-    collections::VecDeque,
-    fs::File, ops::Deref, sync::{mpsc::SyncSender, Arc, Mutex}, thread::JoinHandle
+    borrow::Borrow, collections::VecDeque, fs::File, ops::Deref, ptr::null, sync::{mpsc::SyncSender, Arc, Mutex}, thread::JoinHandle
 };
 use std::io::Write;
 use log::{debug, error, info};
@@ -54,7 +53,7 @@ impl RecordState {
         }
     }
 
-    pub unsafe fn start_recording_thread(&mut self) -> Option<SyncSender<FrameWrapper>> {
+    pub unsafe fn start_recording_thread(&mut self) -> (SyncSender<FrameWrapper>, Option<JoinHandle<()>>) {
         let (tx, rx) = std::sync::mpsc::sync_channel::<FrameWrapper>(3);
 
         let file_ext: std::ffi::CString = std::ffi::CString::new("mp4").unwrap();
@@ -78,7 +77,7 @@ impl RecordState {
         let locked_format_ctx = self.format_context.clone(); // expect("someone else is using the encode context");
         #[allow(unused_mut)]
         let mut pts = 0 as i64;
-        self.join_handle = Some(std::thread::spawn(move|| {
+        let join_handle = Some(std::thread::spawn(move|| {
             let pkt = ffi::av_packet_alloc().as_mut().unwrap();
             let locked_format_ctx = locked_format_ctx.lock().unwrap().ptr;
             let video_st = video_st;
@@ -107,7 +106,7 @@ impl RecordState {
             ffi::av_write_trailer(locked_format_ctx);
             // let _ = file_out.flush();
         }));
-        Some(tx)
+        (tx, join_handle)
     }
 }
 

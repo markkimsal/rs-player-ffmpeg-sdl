@@ -198,6 +198,7 @@ pub unsafe fn event_loop(
     //     .as_mut()
     //     .expect("failed to allocated memory for AVFrame");
 
+    let mut record_handle: Option<JoinHandle<()>> = None;
     'running: loop {
         // i = (i + 1) % 255;
         i = i + 1;
@@ -220,7 +221,10 @@ pub unsafe fn event_loop(
                                     }
                                     false => {
                                         tx.send("Start recording".to_string()).unwrap();
-                                        record_tx = the_record_state.start_recording_thread();
+                                        // record_tx = the_record_state.start_recording_thread();
+                                        let result = the_record_state.start_recording_thread();
+                                        record_tx = Some(result.0);
+                                        record_handle = result.1;
                                     }
                                 }
                                 subsystem.is_recording = !subsystem.is_recording;
@@ -230,6 +234,11 @@ pub unsafe fn event_loop(
                                 analyzer_ctx.pause();
                             }
                             Some(Keycode::Q) | Some(Keycode::Escape) => {
+                                record_tx = None;
+                                // the_record_state.stop_recording_thread();
+                                if let Some(record_handle) = record_handle {
+                                    record_handle.join().unwrap();
+                                }
                                 tx.send("quit".to_string()).unwrap();
                                 break 'running;
                             }
@@ -247,47 +256,41 @@ pub unsafe fn event_loop(
             subsystem.is_recording,
         );
 
-        if analyzer_ctx.is_paused() == true {
-            std::thread::yield_now();
-            screen_cap(subsystem, &mut record_tx, i);
-            continue;
-        }
+        // if analyzer_ctx.is_paused() == true {
+        //     std::thread::yield_now();
+        //     screen_cap(subsystem, &mut record_tx, i);
+        //     continue;
+        // }
 
+
+        if !analyzer_ctx.is_paused() {
 
         if let Some(dest_frame) = analyzer_ctx.dequeue_frame() {
             // let dest_frame = dest_frame.ptr;
 
-            frame_to_texture(dest_frame.as_mut().unwrap(), &mut texture).unwrap_or_default();
+            frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture).unwrap_or_default();
 
             // texture_to_texture(
             //     &mut movie_texture,
             //     &mut subsystem.canvas,
             //     &mut texture,
             // ).unwrap_or_default();
-
-            composite(&mut subsystem.canvas, &mut texture, &mut ui_texture);
-            // SDL_UpdateYUVTexture(
-            //     texture.raw(), ::std::ptr::null(),
-            //     dest_frame.data[0], dest_frame.linesize[0],
-            //     dest_frame.data[1], dest_frame.linesize[1],
-            //     dest_frame.data[2], dest_frame.linesize[2],
-            // );
-
-            // canvas.copy(&streaming_texture, None, None).unwrap();
-
-            blit_texture(&mut subsystem.canvas, &mut texture).unwrap_or_default();
-
-            // let codec_context = unsafe{codec_context.as_ref().unwrap()};
-            // last_pts = ffi::av_rescale_q(frame.ptr.as_ref().unwrap().pts, time_base, ffi::AVRational { num: 1, den: 1 });
-            // last_pts = frame.ptr.as_ref().unwrap().best_effort_timestamp;
             ffi::av_frame_unref(dest_frame as *mut _);
-        };
-        last_clock = ffi::av_gettime_relative();
+        }};
+
+        composite(&mut subsystem.canvas, &mut texture, &mut movie_texture);
+        composite(&mut subsystem.canvas, &mut texture, &mut ui_texture);
+        blit_texture(&mut subsystem.canvas, &mut texture).unwrap_or_default();
+        // blit_texture(&mut subsystem.canvas, &mut ui_texture).unwrap_or_default();
+
+        // last_clock = ffi::av_gettime_relative();
         subsystem.canvas.present();
 
         screen_cap(subsystem, &mut record_tx, i);
         std::thread::yield_now();
     }
+    drop(tx);
+    drop(record_tx);
     // ffi::av_free(dest_frame.opaque);
 }
 

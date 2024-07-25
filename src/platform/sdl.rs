@@ -191,7 +191,7 @@ pub unsafe fn event_loop(movie_state: std::sync::Arc<&mut movie_state::MovieStat
                         },
                         false => {
                             tx.send("Start recording".to_string()).unwrap();
-                            record_tx = the_record_state.start_recording_thread();
+                            // (record_tx, record_handle) = the_record_state.start_recording_thread();
                         }
                     }
                     subsystem.is_recording = !subsystem.is_recording;
