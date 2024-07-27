@@ -13,13 +13,14 @@ impl AnalyzerContext {
     pub fn new() -> AnalyzerContext {
         AnalyzerContext {
             movie_list: vec![],
-            paused: std::sync::atomic::AtomicBool::new(false),
+            paused: std::sync::atomic::AtomicBool::new(true),
         }
     }
 }
 
 impl AnalyzerContext {
     pub fn add_movie_state(&mut self, movie: MovieState) {
+        movie.pause();
         self.movie_list.push(movie);
     }
 
@@ -27,7 +28,11 @@ impl AnalyzerContext {
         if self.movie_list.len() == 0 {
             return None;
         }
-        if let None = self.peek_movie_state_packet() {
+        if let Some(pts) = self.peek_movie_state_packet() {
+            if pts != 0 && self.is_paused() {
+                return None;
+            }
+        } else {
             return None;
         }
         let dest_frame = unsafe {
@@ -73,6 +78,10 @@ impl AnalyzerContext {
 
     fn peek_movie_state_packet(&mut self) -> Option<i64> {
         let movie_state = self.movie_list.get_mut(0).unwrap();
+        if movie_state.step {
+            movie_state.step = false;
+            return Some(0);
+        }
         if let Some(pts) = movie_state.peek_frame_pts() {
             // if last_pts == ffi::AV_NOPTS_VALUE {
             //     let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
@@ -120,9 +129,20 @@ impl AnalyzerContext {
         None
     }
 
+    pub fn step(&mut self) {
+        if ! self.paused.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        self.movie_list.get_mut(0).unwrap().step();
+    }
+
     pub fn pause(&self) {
         let state = self.paused.load(std::sync::atomic::Ordering::Relaxed);
         self.paused.store(!state, std::sync::atomic::Ordering::Relaxed);
+
+        self.movie_list.iter().for_each(|movie| {
+            movie.pause();
+        });
     }
 
     pub fn is_paused(&self) -> bool{

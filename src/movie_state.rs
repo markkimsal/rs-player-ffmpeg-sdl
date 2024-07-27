@@ -23,6 +23,7 @@ pub struct MovieState {
     pub video_frame_rate: ffi::AVRational,
     pub last_pts: i64,
     pub last_pts_time: i64,
+    pub step: bool,
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
@@ -67,6 +68,7 @@ impl MovieState {
             video_frame_rate: ffi::AVRational { num: 1, den: 60 },
             last_pts: ffi::AV_NOPTS_VALUE,
             last_pts_time: 0,
+            step: false,
         }
     }
 }
@@ -127,6 +129,13 @@ impl MovieState {
 
     pub fn is_paused(&self) -> bool{
         self.paused.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn step(&mut self) {
+        if ! self.paused.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        self.step = true;
     }
 
 }

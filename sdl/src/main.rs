@@ -233,6 +233,10 @@ pub unsafe fn event_loop(
                                 tx.send("pause".to_string()).unwrap();
                                 analyzer_ctx.pause();
                             }
+                            Some(Keycode::Period) => {
+                                tx.send("step".to_string()).unwrap();
+                                analyzer_ctx.step();
+                            }
                             Some(Keycode::Q) | Some(Keycode::Escape) => {
                                 record_tx = None;
                                 // the_record_state.stop_recording_thread();
@@ -263,8 +267,6 @@ pub unsafe fn event_loop(
         // }
 
 
-        if !analyzer_ctx.is_paused() {
-
         if let Some(dest_frame) = analyzer_ctx.dequeue_frame() {
             // let dest_frame = dest_frame.ptr;
 
@@ -276,7 +278,7 @@ pub unsafe fn event_loop(
             //     &mut texture,
             // ).unwrap_or_default();
             ffi::av_frame_unref(dest_frame as *mut _);
-        }};
+        };
 
         composite(&mut subsystem.canvas, &mut texture, &mut movie_texture);
         composite(&mut subsystem.canvas, &mut texture, &mut ui_texture);
