@@ -19,8 +19,8 @@ use crate::movie_state::movie_state_enqueue_packet;
 use crate::movie_state::CodecContextWrapper;
 use crate::movie_state::MovieState;
 
-#[cfg_attr(target_os="linux", path="platform/sdl.rs")]
-mod platform;
+// #[cfg_attr(target_os="linux", path="platform/sdl.rs")]
+// mod platform;
 
 #[no_mangle]
 pub unsafe extern "C" fn new_movie_state() -> *mut MovieState {
