@@ -12,7 +12,6 @@ use log::info;
 use log::error;
 use rusty_ffmpeg::ffi;
 
-use rusty_ffmpeg::ffi::av_frame_free;
 
 use crate::analyzer_state::AnalyzerContext;
 use crate::movie_state::movie_state_enqueue_frame;
@@ -337,16 +336,17 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
     });
 
     std::thread::spawn(move || {
+        // when all tx refs are dropped, this rx will close
         for msg in rx {
             debug!("🦀🦀 received message: {}", msg);
             if msg == "quit" {
-                keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
-                decode_thread.join().unwrap();
-                packet_thread.join().unwrap();
-                break;
+               break;
             }
         }
         info!("🦀🦀 done");
+        keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+        decode_thread.join().unwrap();
+        packet_thread.join().unwrap();
     });
     tx
 }
