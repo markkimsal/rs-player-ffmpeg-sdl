@@ -82,7 +82,7 @@ fn main() {
     clog.init();
 
     let args: Vec<String> = std::env::args().collect();
-    let default_file = String::from("foo.mp4");
+    let default_file = String::from("test_vid.mp4");
     let mut analyzer_ctx = AnalyzerContext::new();
 
     let window_width: u32 = 1280;

@@ -27,18 +27,59 @@ For clickable "run" functionality in vscode, update your `.vscode/settings.json`
     }
 ```
 
-Passing movie file to the application
+Generating a test video
 ===
-In order to play a movie like `foo.mp4`, you must edit your `.vscode/settings.json` and add
+```
+./scripts/make-test-vid.sh
+```
+Will overwrite `test_vid.mp4` in the current directory.
+
+Setting up VSCode
+===
+You can create `cargo` type tasks like this:
 ```json
-	"rust-analyzer.runnables.extraArgs": [
-		"foo.mp4"
-	],
+        {
+            "type": "cargo",
+            "command": "run",
+            "args": [
+                "--package",
+                "sdl",
+                "--bin",
+                "sdl",
+                "test_vid.mp4"
+            ],
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "FFMPEG_PKG_CONFIG_PATH": "ffmpeg-kit/prebuilt/linux-x86_64/ffmpeg/lib/pkgconfig",
+                "LD_LIBRARY_PATH": "ffmpeg-kit/prebuilt/linux-x86_64/ffmpeg/lib"
+            },
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": "build",
+            "label": "rust: run sdl"
+        },
+        {
+            "type": "cargo",
+            "command": "build",
+            "args": [
+                "--package",
+                "sdl"
+            ],
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "FFMPEG_PKG_CONFIG_PATH": "ffmpeg-kit/prebuilt/linux-x86_64/ffmpeg/lib/pkgconfig",
+                "LD_LIBRARY_PATH": "ffmpeg-kit/prebuilt/linux-x86_64/ffmpeg/lib"
+            },
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": "build",
+            "label": "rust: build sdl"
+        }
 ```
 
+This enables quick tasks from `ctrl-d`.  You can either always set `FFMPEG_PKG_CONFIG_PATH` and `LD_LIBRARY_PATH` for every task
+or set them once in your shell before launching vscode.
 
-Passing movie file to the application in debug
-===
-There doesn't seem to be anyway to pass command line arguments to the rust-analyzer when debugging.
-Therefore, you should put any movie file you want to debug in the root foler as `foo.mp4` as this
-is the fallback value for when no command line parameters are passed in.
+You can also put these envs into your `.cargo/config.toml` file under the `[env]` section.
