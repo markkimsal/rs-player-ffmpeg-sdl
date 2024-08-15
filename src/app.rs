@@ -6,15 +6,13 @@ use std::ptr::NonNull;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 use log::debug;
 use log::info;
-use log::error;
 use rusty_ffmpeg::ffi;
 
 
 use crate::analyzer_state::AnalyzerContext;
-use crate::movie_state::movie_state_enqueue_frame;
+use crate::decode_thread::decode_thread;
 use crate::movie_state::movie_state_enqueue_packet;
 use crate::movie_state::CodecContextWrapper;
 use crate::movie_state::MovieState;
@@ -269,14 +267,11 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
     // let arc_format_context = std::sync::Arc::clone(&movie_state.format_context);
     // let arc_video_ctx = std::sync::Arc::clone(&movie_state.video_ctx);
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let pause_packets = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let movie_state_arc    = std::sync::Arc::new(movie_state);
     let movie_state1   = std::sync::Arc::clone(&movie_state_arc);
 
-    let pause_packets2 = std::sync::Arc::clone(&pause_packets);
     let keep_running2  = std::sync::Arc::clone(&keep_running);
     let packet_thread = std::thread::spawn(move || packet_thread_spawner(
-        std::sync::Arc::clone(&pause_packets2),
         std::sync::Arc::clone(&keep_running2),
         movie_state1.video_stream_idx,
         movie_state1,
@@ -291,48 +286,10 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
     // let videoqueue     = std::sync::Arc::clone(&movie_state.videoqueue);
     // let picq           = std::sync::Arc::clone(&movie_state.picq);
     // let video_ctx      = std::sync::Arc::clone(&movie_state.video_ctx);
-    let pause_packets3 = std::sync::Arc::clone(&pause_packets);
     let keep_running3  = std::sync::Arc::clone(&keep_running);
     let movie_state2   = std::sync::Arc::clone(&movie_state_arc);
     let decode_thread  = std::thread::spawn(move || {
-        let frame = ffi::av_frame_alloc()
-            .as_mut()
-            .expect("failed to allocated memory for AVFrame");
-        loop {
-        unsafe {
-            let mut locked_videoqueue = movie_state2.videoqueue.lock().unwrap();
-            if let Some(packet) = locked_videoqueue.front_mut() {
-                // !Note that AVPacket.pts is in AVStream.time_base units, not AVCodecContext.time_base units.
-                // let mut delay:f64 = packet.ptr.as_ref().unwrap().pts as f64 - last_pts as f64;
-                // last_pts = packet.ptr.as_ref().unwrap().pts;
-                if let Ok(_) = decode_packet(packet.ptr, &movie_state2.video_ctx, frame) {
-                    {
-                        // let time_base = movie_state.video_stream.lock().unwrap().ptr.as_ref().unwrap().time_base;
-                        // delay *= (time_base.num as f64) / (time_base.den as f64);
-                    }
-
-                    while let Err(_) = movie_state_enqueue_frame(&movie_state2.picq, frame) {
-                        ::std::thread::yield_now();
-                        ::std::thread::sleep(Duration::from_millis(4));
-                        if ! keep_running3.load(std::sync::atomic::Ordering::Relaxed) {
-                            break;
-                        }
-                    }
-                }
-                ffi::av_frame_unref(frame as *mut _);
-                ffi::av_packet_unref(packet.ptr);
-                locked_videoqueue.pop_front();
-            }
-            ::std::thread::yield_now();
-            if ! keep_running3.load(std::sync::atomic::Ordering::Relaxed) {
-                break;
-            }
-            if pause_packets3.load(std::sync::atomic::Ordering::Relaxed) {
-                ::std::thread::park();
-            }
-        }
-        };
-        ffi::av_frame_free(frame as *mut _ as *mut _);
+        decode_thread(movie_state2, keep_running3)
     });
 
     std::thread::spawn(move || {
@@ -351,50 +308,6 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
     tx
 }
 
-fn decode_packet(
-    packet: *mut ffi::AVPacket,
-    arc_codec_context: &Mutex<CodecContextWrapper>,
-    frame: &mut ffi::AVFrame,
-) -> Result<(), String> {
-    let lock = arc_codec_context.try_lock();
-    if let Err(e) = lock {
-        return Err(String::from("Error while locking the codec context."));
-    }
-    let codec_context = unsafe {lock.unwrap().ptr.as_mut().unwrap()};
-    let mut response = unsafe { ffi::avcodec_send_packet(codec_context, packet) };
-
-    if response < 0 {
-        error!("Error while sending a packet to the decoder. {:?}", ffi::av_err2str(response));
-        return Err(String::from("Error while sending a packet to the decoder."));
-    }
-    while response >= 0 {
-        response = unsafe { ffi::avcodec_receive_frame(codec_context, frame) };
-        if response == ffi::AVERROR(ffi::EAGAIN) || response == ffi::AVERROR_EOF {
-            return Err(String::from(
-                "EAGAIN",
-            ));
-            // break;
-        } else if response < 0 {
-            return Err(String::from(
-                "Error while receiving a frame from the decoder.",
-            ));
-        }
-        // let codec_context = unsafe{codec_context.as_ref().unwrap()};
-        debug!(
-            "Frame {} (type={}, size={} bytes) pts {} key_frame {} [DTS {}]",
-            codec_context.frame_number,
-            unsafe { ffi::av_get_picture_type_char(frame.pict_type) },
-            frame.pkt_size,
-            // frame.pts * codec_context.time_base.num as i64 / codec_context.time_base.den as i64,
-            unsafe {ffi::av_rescale_q(frame.pts, codec_context.time_base, ffi::AVRational { num: 1, den: 1 })},
-            frame.key_frame,
-            frame.pkt_dts
-        );
-        frame.format = codec_context.pix_fmt;
-        return Ok(());
-    }
-    Ok(())
-}
 
 unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) -> i32 {
     let key_name = CString::new("rotate").unwrap();
@@ -439,7 +352,6 @@ unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) 
 }
 
 fn packet_thread_spawner(
-    pause_packets: std::sync::Arc<std::sync::atomic::AtomicBool>,
     keep_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
     video_stream_idx: i64,
     movie_state: Arc<&mut MovieState>
@@ -496,9 +408,6 @@ fn packet_thread_spawner(
                 } else {
                     ffi::av_packet_unref(packet);
                 }
-            }
-            if pause_packets.load(std::sync::atomic::Ordering::Relaxed) {
-                ::std::thread::park();
             }
             ::std::thread::yield_now();
         }
