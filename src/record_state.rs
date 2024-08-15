@@ -69,7 +69,10 @@ impl RecordState {
         if (*out_fmt).video_codec != ffi::AVCodecID_AV_CODEC_ID_NONE {
             add_stream(&mut video_st, &mut fctx, &mut video_codec, (*out_fmt).video_codec, 1280, 720);
         }
-        open_video(fctx, &mut video_codec, &mut video_st);
+        match open_video(fctx, &mut video_codec, &mut video_st) {
+            Err(e) => panic!("unable to open video coded for recording"),
+            _ => {}
+        }
         ffi::av_dump_format(fctx, 0, file_name.as_ptr() as _, 1);
 
         // let locked_video_ctx = self.video_ctx.clone(); // expect("someone else is using the encode context");
@@ -136,13 +139,13 @@ unsafe fn add_stream(
     width: usize,
     height: usize,
 ) {
-    ost.st = StreamWrapper{ ptr: ffi::avformat_new_stream(*oc, std::ptr::null_mut()) };
-
     let desired_encoder: std::ffi::CString = std::ffi::CString::new("libopenh264").unwrap();
     *codec = ffi::avcodec_find_encoder_by_name(desired_encoder.as_ptr() as _);
     if codec.is_null() {
         *codec = ffi::avcodec_find_encoder(codec_id);
     }
+    ost.st = StreamWrapper{ ptr: ffi::avformat_new_stream(*oc, std::ptr::null_mut()) };
+
     let c = ffi::avcodec_alloc_context3(*codec);
     let c = c.as_mut().unwrap();
     match codec.as_ref().unwrap().type_ {
@@ -159,32 +162,42 @@ unsafe fn add_stream(
             c.pix_fmt = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
             // c.profile = ffi::FF_PROFILE_H264_CONSTRAINED_BASELINE as _;
             // c.profile = ffi::FF_PROFILE_H264_MAIN as _;
-            ost.st.as_mut().unwrap().time_base = ffi::AVRational{num: 1, den: 25};
+            ost.st.as_mut().unwrap().time_base = ffi::AVRational{num: 1, den: 60};
             // TODO: set as a reference to ost.st?
             /* frames per second */
-            c.time_base = ffi::AVRational{ num: 1, den: 25};
-            c.framerate = ffi::AVRational{ num: 25, den: 1};
+            c.time_base = ffi::AVRational{ num: 1, den: 60};
+            c.framerate = ffi::AVRational{ num: 60, den: 1};
         }
         _ => {
             error!("📽 📽  unknnown codec type: {:?}", (*(*codec)).type_);
         }
     }
     ost.enc_ctx.ptr = c;
+    /* Some formats want stream headers to be separate. */
+    if ((*(**oc).oformat).flags & ffi::AVFMT_GLOBALHEADER as i32) != 0 {
+        ost.enc_ctx.ptr.as_mut().unwrap().flags |= ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+    }
 }
 
 unsafe fn open_video(
     oc: *const ffi::AVFormatContext,
     codec: &mut *const ffi::AVCodec,
     ost: &mut OutputStream,
-) {
-    let _ = ffi::avcodec_open2(ost.enc_ctx.ptr, *codec, std::ptr::null_mut());
-    info!("📽 📽  opened codec: {:?}", codec);
+) ->Result<(), ()> {
+    match ffi::avcodec_open2(ost.enc_ctx.ptr, *codec, std::ptr::null_mut()) {
+        0 => info!("📽 📽  opened codec: {:?}", codec),
+        _ => {
+            error!("📽 📽  failed to open codec");
+        },
+    }
 
-    /* Some formats want stream headers to be separate. */
-    // if ((*oc).oformat.as_ref().unwrap().flags & ffi::AVFMT_GLOBALHEADER as i32) != 0 {
-    //     ost.enc_ctx.ptr.as_mut().unwrap().flags |= ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
-    // }
-    ffi::avcodec_parameters_from_context((*ost.st.ptr).codecpar, ost.enc_ctx.ptr);
+    match ffi::avcodec_parameters_from_context((*ost.st.ptr).codecpar, ost.enc_ctx.ptr) {
+        0 => Ok(()),
+        _ => {
+            error!("📽 📽  failed to copy codec params");
+            Err(())
+        },
+    }
 }
 
 unsafe fn write_frame_interleaved(
@@ -214,7 +227,10 @@ unsafe fn write_frame_interleaved(
         /* rescale output packet timestamp values from codec to stream timebase */
         ffi::av_packet_rescale_ts(pkt, (*video_st.enc_ctx.ptr).time_base, (*video_st.st.ptr).time_base);
 
-        ffi::av_interleaved_write_frame(locked_format_ctx, pkt);
+        match ffi::av_interleaved_write_frame(locked_format_ctx, pkt) {
+            0 => {},
+            _ => error!("error writing frame"),
+        }
 
         // let buf = std::slice::from_raw_parts(pkt.as_ref().unwrap().data, pkt.as_ref().unwrap().size as _);
         // eprintln!("📽 📽  write packet: {} (size={})", pkt.as_ref().unwrap().pts, pkt.as_ref().unwrap().size);
