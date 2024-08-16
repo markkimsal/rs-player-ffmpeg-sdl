@@ -20,6 +20,7 @@ use crate::movie_state::CodecContextWrapper;
 use crate::movie_state::MovieState;
 
 static mut DECODE_THREADS: Vec<Box<JoinHandle<()>>> = vec![];
+static mut PACKET_THREADS: Vec<Box<JoinHandle<()>>> = vec![];
 
 // #[cfg_attr(target_os="linux", path="platform/sdl.rs")]
 // mod platform;
@@ -168,11 +169,15 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
     let movie_state1   = std::sync::Arc::clone(&movie_state_arc);
 
     let keep_running2  = std::sync::Arc::clone(&keep_running);
-    let packet_thread = std::thread::spawn(move || packet_thread_spawner(
-        std::sync::Arc::clone(&keep_running2),
-        movie_state1.video_stream_idx,
-        movie_state1,
-    ));
+
+    PACKET_THREADS.push(
+        Box::new(std::thread::spawn(move || packet_thread_spawner(
+            std::sync::Arc::clone(&keep_running2),
+            movie_state1.video_stream_idx,
+            movie_state1,
+        )))
+    );
+
 
     let keep_running3  = std::sync::Arc::clone(&keep_running);
     let movie_state2   = std::sync::Arc::clone(&movie_state_arc);
@@ -181,9 +186,6 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
             decode_thread(movie_state2, keep_running3)
         }))
     );
-    // let decode_thread  = std::thread::spawn(move || {
-    //     decode_thread(movie_state2, keep_running3)
-    // });
 
     std::thread::spawn(move || {
         // when all tx refs are dropped, this rx will close
@@ -200,11 +202,10 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
             let cur_thread = DECODE_THREADS.remove(index);
             let _ = cur_thread.join();
         }
-        for (index, _) in DECODE_THREADS.iter().enumerate() {
-            let cur_thread = DECODE_THREADS.remove(index);
+        for (index, _) in PACKET_THREADS.iter().enumerate() {
+            let cur_thread = PACKET_THREADS.remove(index);
             cur_thread.join().unwrap();
         }
-        packet_thread.join().unwrap();
     });
     tx
 }
