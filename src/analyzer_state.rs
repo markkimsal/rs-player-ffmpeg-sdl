@@ -24,6 +24,10 @@ impl AnalyzerContext {
         self.movie_list.push(movie);
     }
 
+    pub fn movie_count(&self) -> u8 {
+        self.movie_list.len() as u8
+    }
+
     pub fn dequeue_frame(&mut self) -> Option<*mut ffi::AVFrame> {
         if self.movie_list.len() == 0 {
             return None;
@@ -147,5 +151,12 @@ impl AnalyzerContext {
 
     pub fn is_paused(&self) -> bool{
         self.paused.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn close(&mut self) {
+        while let Some(movie) = self.movie_list.pop() {
+            eprint!("dropping movie \n");
+            drop(movie);
+        }
     }
 }

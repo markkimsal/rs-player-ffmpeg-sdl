@@ -1,4 +1,3 @@
-#![allow(unused_variables)]
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::ptr;
@@ -144,94 +143,6 @@ pub unsafe extern "C" fn open_movie(analyzer_context: &mut AnalyzerContext, file
     );
 }
 
-#[allow(improper_ctypes_definitions)]
-pub unsafe extern "C" fn open_input(src: &str) -> (*const ffi::AVCodec, &mut ffi::AVFormatContext, &mut ffi::AVCodecContext) {
-// unsafe {ffi::av_log_set_level(ffi::AV_LOG_DEBUG as i32)};
-    let filepath: CString = CString::new(src).unwrap();
-    let mut format_ctx = unsafe { ffi::avformat_alloc_context() };
-
-    let format     = ptr::null_mut();
-    let dict       = ptr::null_mut();
-    if ffi::avformat_open_input(&mut format_ctx, filepath.as_ptr(), format, dict) != 0 {
-        panic!("🚩 cannot open file")
-    }
-    let format_context = format_ctx.as_mut().unwrap();
-    let format_name = CStr::from_ptr((*(*format_ctx).iformat).name)
-        .to_str()
-        .unwrap();
-
-    if ffi::avformat_find_stream_info(format_context, ptr::null_mut()) < 0 {
-        panic!("ERROR could not get the stream info");
-    }
-    ffi::av_dump_format(format_context, 0, filepath.as_ptr(), 0);
-
-    let streams = std::slice::from_raw_parts(format_context.streams, format_context.nb_streams as usize);
-    let mut codec_ptr: *const ffi::AVCodec = ptr::null_mut();
-    let mut codec_parameters_ptr: *const ffi::AVCodecParameters = ptr::null_mut();
-    let mut video_stream_index = None;
-    let mut time_base_den:i32 = 10000;
-    let mut time_base_num:i32 = 10000;
-
-    for s in streams
-        .iter()
-        .map(|stream| unsafe { stream.as_ref() }.unwrap())
-        .enumerate()
-    {
-        let (i, &stream): (usize, &ffi::AVStream) = s;
-        println!(
-            "AVStream->time_base before open codec {}/{}",
-            stream.time_base.num, stream.time_base.den
-        );
-
-        let local_codec_params = unsafe { stream.codecpar.as_ref() }
-            .expect("ERROR: unable to dereference codec parameters");
-        let local_codec = unsafe { ffi::avcodec_find_decoder(local_codec_params.codec_id).as_ref() }
-            .expect("ERROR unsupported codec!");
-
-        match local_codec_params.codec_type {
-            ffi::AVMediaType_AVMEDIA_TYPE_VIDEO => {
-                if video_stream_index.is_none() {
-                    video_stream_index = Some(i);
-                    codec_ptr = local_codec;
-                    codec_parameters_ptr = local_codec_params;
-                    time_base_den = stream.time_base.den;
-                    time_base_num = stream.time_base.num;
-                }
-
-                println!(
-                    "Video Codec: resolution {} x {}",
-                    local_codec_params.width, local_codec_params.height
-                );
-                println!(
-                    "Video Codec: {} {:?}",
-                    local_codec_params.codec_id,
-                    match (*local_codec).long_name.is_null()  {
-                        true => CStr::from_ptr((*local_codec).name),
-                        false => CStr::from_ptr((*local_codec).long_name),
-                    }
-                );
-            },
-            _ => {}
-        }
-    }
-    let codec_context = ffi::avcodec_alloc_context3(codec_ptr).as_mut().unwrap();
-
-    if ffi::avcodec_parameters_to_context(codec_context, codec_parameters_ptr) < 0 {
-        panic!("failed to copy codec params to codec context");
-    }
-
-    if ffi::avcodec_open2(codec_context, codec_ptr, ptr::null_mut()) < 0 {
-        panic!("failed to open codec through avcodec_open2");
-    }
-    let mut dur_s = format_context.duration / time_base_den as i64;
-    let dur_min = dur_s  / 6000; // (60 * time_base_den as i64);
-    dur_s -= dur_min * 6000; // (60 * time_base_den as i64);
-    println!(
-        "format {}, duration {:0>3}:{:0>2}, time_base {} /{}",
-        format_name, dur_min, dur_s / 100 , time_base_num, time_base_den
-    );
-    (codec_ptr, format_context, codec_context)
-}
 #[repr(C)]
 struct Storage<'m> {
     // ptr: *mut ffi::AVFormatContext,
@@ -245,27 +156,8 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
 
     let analyzer_ctx = analyzer_ctx.as_mut().unwrap();
     let movie_state = analyzer_ctx.movie_list.get_mut(0).unwrap();
-    let format_context = &movie_state.format_context;
-    let codec_context = movie_state.video_ctx.lock().unwrap().ptr.as_ref().unwrap();
-    let rotation = get_orientation_metadata_value((*format_context).lock().unwrap().ptr);
-
-    let (window_width, window_height): (u32, u32) = match rotation {
-        90 => (codec_context.height as u32 , codec_context.width as u32 ),
-        _  => (codec_context.width as u32 , codec_context.height as u32 )
-    };
-    // let (window_width, window_height): (u32, u32) = match rotation {
-    //      90 => (450, 800),
-    //     -90 => (450, 800),
-    //     _  => (800, 450)
-    // };
-    // let frame = unsafe { ffi::av_frame_alloc().as_mut() }
-    //     .expect("failed to allocated memory for AVFrame");
-    // let packet = unsafe { ffi::av_packet_alloc().as_mut() }
-    //     .expect("failed to allocated memory for AVPacket");
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
-    // let arc_format_context = std::sync::Arc::clone(&movie_state.format_context);
-    // let arc_video_ctx = std::sync::Arc::clone(&movie_state.video_ctx);
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let movie_state_arc    = std::sync::Arc::new(movie_state);
     let movie_state1   = std::sync::Arc::clone(&movie_state_arc);
@@ -277,15 +169,6 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
         movie_state1,
     ));
 
-    let i = 0;
-    let last_pts = 0;
-    let last_clock = ffi::av_gettime_relative();
-    // let videoqueue =  movie_state.videoqueue.clone();
-    // let video_ctx =  movie_state.video_ctx.clone();
-    // let picq =  movie_state.picq.clone();
-    // let videoqueue     = std::sync::Arc::clone(&movie_state.videoqueue);
-    // let picq           = std::sync::Arc::clone(&movie_state.picq);
-    // let video_ctx      = std::sync::Arc::clone(&movie_state.video_ctx);
     let keep_running3  = std::sync::Arc::clone(&keep_running);
     let movie_state2   = std::sync::Arc::clone(&movie_state_arc);
     let decode_thread  = std::thread::spawn(move || {
@@ -412,4 +295,28 @@ fn packet_thread_spawner(
             ::std::thread::yield_now();
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use ::std::{thread::sleep, time::Duration};
+
+    use super::*;
+
+    #[test]
+    fn test_add_two_movies_to_analyzer() {
+        let default_file = String::from("test_vid.mp4");
+        let mut analyzer_ctx = AnalyzerContext::new();
+        let filepath: std::ffi::CString = std::ffi::CString::new(default_file).unwrap();
+        unsafe {
+            open_movie(&mut analyzer_ctx, filepath.as_ptr());
+            open_movie(&mut analyzer_ctx, filepath.as_ptr());
+        }
+
+        assert_eq!(analyzer_ctx.movie_count(), 2);
+        analyzer_ctx.close();
+        sleep(Duration::from_millis(200));
+
+        assert_eq!(analyzer_ctx.movie_count(), 0)
+    }
 }
