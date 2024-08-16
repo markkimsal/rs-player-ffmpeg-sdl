@@ -138,6 +138,10 @@ impl MovieState {
         self.step = true;
     }
 
+    pub fn step_force(&mut self) {
+        self.step = true;
+    }
+
 }
 pub fn movie_state_enqueue_packet(videoqueue: &Mutex<VecDeque<PacketWrapper>>, packet: *mut ffi::AVPacket) -> Result<(), ()> {
     let mut vq = videoqueue.lock().unwrap();

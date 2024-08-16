@@ -85,11 +85,9 @@ fn main() {
     let default_file = String::from("test_vid.mp4");
     let mut analyzer_ctx = AnalyzerContext::new();
 
-    let window_width: u32 = 1280;
+    let window_width:  u32 = 1280;
     let window_height: u32 = 720;
  
-    // let (tx, rx) = std::sync::mpsc::channel::<String>();
-
     unsafe {
         let mut subsystem = match init_subsystem(window_width, window_height) {
             Ok(s) => s,
