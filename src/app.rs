@@ -154,9 +154,11 @@ struct Storage<'m> {
 }
 unsafe impl Send for Storage<'_>{}
 
+/// play all movies attached to the analyzer
+/// this is unsafe because it mutates a single static vec without a mutex
+/// this should only be called from the calling app's main UI thread
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
-/// play all movies attached to the analyzer
 pub unsafe extern "C" fn start_analyzer(analyzer_ctx: *mut AnalyzerContext) -> Sender<String> {
     let analyzer_ctx = analyzer_ctx.as_mut().unwrap();
 
@@ -164,7 +166,6 @@ pub unsafe extern "C" fn start_analyzer(analyzer_ctx: *mut AnalyzerContext) -> S
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
 
     for movie_state in analyzer_ctx.movie_list.iter_mut() {
-        // let movie_state = analyzer_ctx.movie_list.get_mut(0).unwrap();
         let movie_state_arc  = std::sync::Arc::new(movie_state);
         let movie_state1     = std::sync::Arc::clone(&movie_state_arc);
 
@@ -210,6 +211,9 @@ pub unsafe extern "C" fn start_analyzer(analyzer_ctx: *mut AnalyzerContext) -> S
 }
 
 
+/// play a single movie statej
+/// this is unsafe because it mutates a single static vec without a mutex
+/// this should only be called from the calling app's main UI thread
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
 pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) -> Sender<String> {
