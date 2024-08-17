@@ -158,6 +158,62 @@ unsafe impl Send for Storage<'_>{}
 
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
+/// play all movies attached to the analyzer
+pub unsafe extern "C" fn start_analyzer(analyzer_ctx: *mut AnalyzerContext) -> Sender<String> {
+    let analyzer_ctx = analyzer_ctx.as_mut().unwrap();
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    for movie_state in analyzer_ctx.movie_list.iter_mut() {
+        // let movie_state = analyzer_ctx.movie_list.get_mut(0).unwrap();
+        let movie_state_arc  = std::sync::Arc::new(movie_state);
+        let movie_state1     = std::sync::Arc::clone(&movie_state_arc);
+
+        let keep_running2  = std::sync::Arc::clone(&keep_running);
+        PACKET_THREADS.push(
+            Box::new(std::thread::spawn(move || packet_thread_spawner(
+                std::sync::Arc::clone(&keep_running2),
+                movie_state1.video_stream_idx,
+                movie_state1,
+            )))
+        );
+
+        let keep_running3  = std::sync::Arc::clone(&keep_running);
+        let movie_state2   = std::sync::Arc::clone(&movie_state_arc);
+        DECODE_THREADS.push(
+            Box::new(std::thread::spawn(move || {
+                decode_thread(movie_state2, keep_running3)
+            }))
+        );
+    }
+
+    std::thread::spawn(move || {
+        // when all tx refs are dropped, this rx will close
+        for msg in rx {
+            debug!("🦀🦀 received message: {}", msg);
+            if msg == "quit" {
+               break;
+            }
+        }
+        info!("🦀🦀 done");
+        keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+
+        for (index, _) in DECODE_THREADS.iter().enumerate() {
+            let cur_thread = DECODE_THREADS.remove(index);
+            let _ = cur_thread.join();
+        }
+        for (index, _) in PACKET_THREADS.iter().enumerate() {
+            let cur_thread = PACKET_THREADS.remove(index);
+            cur_thread.join().unwrap();
+        }
+    });
+    tx
+}
+
+
+#[no_mangle]
+#[allow(improper_ctypes_definitions)]
 pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sender<String> {
 
     let analyzer_ctx = analyzer_ctx.as_mut().unwrap();

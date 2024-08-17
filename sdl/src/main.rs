@@ -9,6 +9,7 @@ use std::{
 };
 
 use log::{debug, info};
+use ::rsplayer::app::start_analyzer;
 use rusty_ffmpeg::ffi::{self, av_frame_unref};
 
 use sdl2::{
@@ -98,8 +99,10 @@ fn main() {
 
         let filepath: std::ffi::CString =
             std::ffi::CString::new(args.get(1).unwrap_or(&default_file).as_str()).unwrap();
-        open_movie(&mut analyzer_ctx, filepath.as_ptr()); //, &mut video_state);
-        let tx = play_movie(&mut analyzer_ctx);
+        open_movie(&mut analyzer_ctx, filepath.as_ptr());
+        open_movie(&mut analyzer_ctx, filepath.as_ptr());
+        // let tx = play_movie(&mut analyzer_ctx);
+        let tx = start_analyzer(&mut analyzer_ctx);
         event_loop(&mut analyzer_ctx, &mut subsystem, tx)
     }
 }
