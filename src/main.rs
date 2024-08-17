@@ -2,6 +2,8 @@
 use std::time::Duration;
 
 use log::debug;
+use ::rsplayer::app::start_analyzer;
+#[allow(unused_imports)]
 use rsplayer::{analyzer_state::AnalyzerContext, app::{open_movie, play_movie}};
 use rusty_ffmpeg::ffi;
 
@@ -23,11 +25,13 @@ fn main() {
     let mut analyzer_ctx = AnalyzerContext::new();
     unsafe {
         let filepath: std::ffi::CString = std::ffi::CString::new(args.get(1).unwrap_or(&default_file).as_str()).unwrap();
-        open_movie(&mut &mut analyzer_ctx, filepath.as_ptr());
+        open_movie(&mut analyzer_ctx, filepath.as_ptr());
+        open_movie(&mut analyzer_ctx, filepath.as_ptr());
     }
 
     unsafe {
-        let tx = play_movie(&mut analyzer_ctx);
+        let tx = start_analyzer(&mut analyzer_ctx);
+        // let tx = play_movie(analyzer_ctx.movie_list.get_mut(0).unwrap());
         let mut keep_playing = true;
         while keep_playing == true {
 

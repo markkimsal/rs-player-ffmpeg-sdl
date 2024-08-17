@@ -1,9 +1,7 @@
 use std::ffi::CStr;
 use std::ffi::CString;
-use ::std::ops::DerefMut;
 use std::ptr;
 use std::ptr::NonNull;
-use ::std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -214,14 +212,11 @@ pub unsafe extern "C" fn start_analyzer(analyzer_ctx: *mut AnalyzerContext) -> S
 
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
-pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sender<String> {
-
-    let analyzer_ctx = analyzer_ctx.as_mut().unwrap();
-    let movie_state = analyzer_ctx.movie_list.get_mut(0).unwrap();
+pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) -> Sender<String> {
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let movie_state_arc    = std::sync::Arc::new(movie_state);
+    let movie_state_arc    = std::sync::Arc::new(movie_state.as_mut().unwrap());
     let movie_state1   = std::sync::Arc::clone(&movie_state_arc);
 
     let keep_running2  = std::sync::Arc::clone(&keep_running);
@@ -267,6 +262,7 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
 }
 
 
+#[allow(dead_code)]
 unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) -> i32 {
     let key_name = CString::new("rotate").unwrap();
 	let tag: *mut ffi::AVDictionaryEntry = ffi::av_dict_get(
