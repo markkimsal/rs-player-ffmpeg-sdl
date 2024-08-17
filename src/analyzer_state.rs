@@ -137,7 +137,9 @@ impl AnalyzerContext {
         if ! self.paused.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
-        self.movie_list.get_mut(0).unwrap().step_force();
+        self.movie_list.iter_mut().for_each(|movie| {
+            movie.step_force();
+        });
     }
 
     pub fn pause(&self) {

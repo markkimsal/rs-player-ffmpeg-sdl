@@ -393,12 +393,12 @@ mod tests {
         let filepath: std::ffi::CString = std::ffi::CString::new(default_file).unwrap();
         unsafe {
             open_movie(&mut analyzer_ctx, filepath.as_ptr());
+            open_movie(&mut analyzer_ctx, filepath.as_ptr());
         }
 
-        assert_eq!(analyzer_ctx.movie_count(), 1);
+        assert_eq!(analyzer_ctx.movie_count(), 2);
         analyzer_ctx.step();
         for movie in analyzer_ctx.movie_list.iter() {
-            println!("movie 1");
             assert_eq!(movie.step, true)
         }
         analyzer_ctx.close();
