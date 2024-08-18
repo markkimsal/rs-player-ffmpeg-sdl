@@ -4,7 +4,7 @@ use ::std::slice::Iter;
 use log::debug;
 use ::log::info;
 use rusty_ffmpeg::ffi;
-use ::rusty_ffmpeg::ffi::AV_NOPTS_VALUE;
+use ::rusty_ffmpeg::ffi::{AVDurationEstimationMethod_AVFMT_DURATION_FROM_BITRATE, AV_NOPTS_VALUE};
 
 use crate::movie_state::{self, FrameWrapper, MovieState};
 
@@ -127,8 +127,15 @@ impl AnalyzerContext {
                 // debug!("       pts: {}", pts * (time_base.den as i64 / time_base.num as i64) );
                 // debug!("       pts: {}", pts );
 
-                // if pts > movie_state.last_pts && movie_state.last_pts != ffi::AV_NOPTS_VALUE {
-                if pts > self.clock.pts && self.clock.pts != ffi::AV_NOPTS_VALUE {
+                // we looped, this pts is less than last displayed pts
+                if pts < movie_state.last_pts && movie_state.last_pts != ffi::AV_NOPTS_VALUE {
+                    movie_state.last_pts = ffi::AV_NOPTS_VALUE;
+                    // movie_state.last_pts = 0;
+                    // reset the master clock down
+                    self.clock.pts = movie_state.last_pts;
+                }
+                if pts > movie_state.last_pts && movie_state.last_pts != ffi::AV_NOPTS_VALUE {
+                // if pts > self.clock.pts && self.clock.pts != ffi::AV_NOPTS_VALUE {
                     let time_base = (*(movie_state.video_stream.lock().unwrap()).ptr).time_base;
                     // println!("av_gettime_relative: {}", (ffi::av_gettime_relative() - last_clock ) );
                     // let mut delay:f64 = ( pts - last_pts ) as f64;
@@ -144,26 +151,28 @@ impl AnalyzerContext {
                     // return None;
                     // TODO: check other movie_states to see if any other frame is ready for display
                     // debug!("delay: {}", delay);
-                    ::std::thread::sleep(std::time::Duration::from_secs_f64(delay));
+                    ::std::thread::sleep(std::time::Duration::from_secs_f64(delay/2.));
                     // info!("delay {}", movie_index);
                     return (0, None);
                     // continue;
                 }
+                // we need to negative delay, let's drop this frame
                 if delay < -0.01 && ! self.paused.load(::std::sync::atomic::Ordering::Relaxed) {
                     // frame drop
                     info!("frame drop {}", movie_index);
+                    movie_state.last_pts      = pts; //ffi::AV_NOPTS_VALUE;
+                    movie_state.last_pts_time = current_clock;
                     let _ = movie_state.dequeue_frame().unwrap();
-
-                movie_state.last_pts      = pts;
-                movie_state.last_pts_time = unsafe { ffi::av_gettime_relative() };
                     return (0, None);
                }
 
                 movie_state.last_pts      = pts;
-                movie_state.last_pts_time = unsafe { ffi::av_gettime_relative() };
-                // if self.clock.pts < movie_state.last_pts {
+                // movie_state.last_pts_time = unsafe { ffi::av_gettime_relative() };
+                movie_state.last_pts_time = current_clock;
+                // next frame's delay is based on only the latest pts
+                if self.clock.pts < movie_state.last_pts {
                     self.clock.pts = movie_state.last_pts;
-                // }
+                }
                 self.clock.last_updated = current_clock;
                 return (movie_index as _, Some(pts));
             }
