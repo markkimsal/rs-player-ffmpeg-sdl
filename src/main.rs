@@ -7,8 +7,6 @@ use ::rsplayer::app::start_analyzer;
 use rsplayer::{analyzer_state::AnalyzerContext, app::{open_movie, play_movie}};
 use rusty_ffmpeg::ffi;
 
-mod movie_state;
-
 fn main() {
 
     let mut clog = colog::default_builder();

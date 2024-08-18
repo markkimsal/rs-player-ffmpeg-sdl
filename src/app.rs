@@ -198,12 +198,12 @@ pub unsafe extern "C" fn start_analyzer(analyzer_ctx: *mut AnalyzerContext) -> S
         info!("🦀🦀 done");
         keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
 
-        for (index, _) in DECODE_THREADS.iter().enumerate() {
-            let cur_thread = DECODE_THREADS.remove(index);
+        while DECODE_THREADS.len() > 0 {
+            let cur_thread = DECODE_THREADS.remove(0);
             let _ = cur_thread.join();
         }
-        for (index, _) in PACKET_THREADS.iter().enumerate() {
-            let cur_thread = PACKET_THREADS.remove(index);
+        while PACKET_THREADS.len() > 0 {
+            let cur_thread = PACKET_THREADS.remove(0);
             cur_thread.join().unwrap();
         }
     });

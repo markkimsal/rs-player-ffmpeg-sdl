@@ -136,6 +136,16 @@ pub unsafe fn event_loop(
         )
         .unwrap();
 
+    let mut movie_texture2: Texture = texture_creator
+        .create_texture(
+            Some(PixelFormatEnum::IYUV),
+            TextureAccess::Target,
+            textw,
+            texth,
+        )
+        .unwrap();
+
+
     let mut draw_texture: Texture = texture_creator
         .create_texture(
             Some(PixelFormatEnum::IYUV),
@@ -235,6 +245,7 @@ pub unsafe fn event_loop(
                                 analyzer_ctx.pause();
                             }
                             Some(Keycode::Period) => {
+                                info!("analyzer step");
                                 tx.send("step".to_string()).unwrap();
                                 analyzer_ctx.step();
                             }
@@ -261,28 +272,62 @@ pub unsafe fn event_loop(
             subsystem.is_recording,
         );
 
-        // if analyzer_ctx.is_paused() == true {
-        //     std::thread::yield_now();
-        //     screen_cap(subsystem, &mut record_tx, i);
-        //     continue;
-        // }
+        if analyzer_ctx.is_paused() == true {
+            std::thread::yield_now();
+            screen_cap(subsystem, &mut record_tx, i);
+            continue;
+        }
 
 
-        if let Some(dest_frame) = analyzer_ctx.dequeue_frame() {
-            // let dest_frame = dest_frame.ptr;
-
-            frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture).unwrap_or_default();
-
-            // texture_to_texture(
-            //     &mut movie_texture,
-            //     &mut subsystem.canvas,
-            //     &mut texture,
-            // ).unwrap_or_default();
-            ffi::av_frame_unref(dest_frame as *mut _);
+        // for movie in analyzer_ctx.movie_list { //}.iter().enumerate().for_each(|(index, movie)| {
+        for index in 0..analyzer_ctx.movie_count() {
+            if let (index, Some(dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
+                if index == 0 {
+            // info!("got pts for movie index {}", index);
+                    frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture).unwrap_or_default();
+                } else {
+            // info!("got pts for movie index {}", index);
+                    frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture2).unwrap_or_default();
+                }
+                // texture_to_texture(
+                //     &mut movie_texture,
+                //     &mut subsystem.canvas,
+                //     &mut texture,
+                // ).unwrap_or_default();
+                ffi::av_frame_unref(dest_frame as *mut _);
+            };
         };
+        ::std::thread::sleep(std::time::Duration::from_secs_f64(0.0001));
+ 
+        // analyzer_ctx.movie_list.iter_mut().enumerate().for_each(|(index, movie)| {
+        //     if let Some(dest_frame) = movie.dequeue_frame_raw() {
+        //         if index == 0 {
+        //             frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture).unwrap_or_default();
+        //         } else {
+        //             frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture2).unwrap_or_default();
+        //         }
+        //         // texture_to_texture(
+        //         //     &mut movie_texture,
+        //         //     &mut subsystem.canvas,
+        //         //     &mut texture,
+        //         // ).unwrap_or_default();
+        //         ffi::av_frame_unref(dest_frame as *mut _);
+        //     };
+        // });
 
-        composite(&mut subsystem.canvas, &mut texture, &mut movie_texture);
-        composite(&mut subsystem.canvas, &mut texture, &mut ui_texture);
+        composite(&mut subsystem.canvas, &mut texture, &mut movie_texture, Some(sdl2::sys::SDL_Rect{
+            x: 0,
+            y: 720/4,
+            w: 1280/2,
+            h: 720/2,
+        }));
+        composite(&mut subsystem.canvas, &mut texture, &mut movie_texture2, Some(sdl2::sys::SDL_Rect{
+            x: 1280/2,
+            y: 720/4,
+            w: 1280/2,
+            h: 720/2,
+        }));
+        composite(&mut subsystem.canvas, &mut texture, &mut ui_texture, None);
         blit_texture(&mut subsystem.canvas, &mut texture).unwrap_or_default();
         // blit_texture(&mut subsystem.canvas, &mut ui_texture).unwrap_or_default();
 
@@ -589,7 +634,7 @@ unsafe fn draw_ui(renderer: &mut Canvas<Window>, tex2: &mut Texture, is_recordin
     sdl2::sys::SDL_SetRenderTarget(renderer.raw(), std::ptr::null_mut());
 }
 
-unsafe fn composite(renderer: &mut Canvas<Window>, tex: &mut Texture, tex2: &mut Texture) {
+unsafe fn composite(renderer: &mut Canvas<Window>, tex: &mut Texture, tex2: &mut Texture, dest_rec: Option<sdl2::sys::SDL_Rect>) {
     sdl2::sys::SDL_SetRenderTarget(renderer.raw(), tex.raw());
     let dest_rect = sdl2::sys::SDL_Rect {
         x: 30,
@@ -605,7 +650,11 @@ unsafe fn composite(renderer: &mut Canvas<Window>, tex: &mut Texture, tex2: &mut
     // sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), 25 as u8);
     // sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), 70 as u8);
     // sdl2::sys::SDL_RenderCopy(renderer.raw(), tex2.raw(), std::ptr::null(), &dest_rect);
-    sdl2::sys::SDL_RenderCopy(renderer.raw(), tex2.raw(), std::ptr::null(), std::ptr::null());
+    if let Some(destination) = dest_rec {
+        sdl2::sys::SDL_RenderCopy(renderer.raw(), tex2.raw(), std::ptr::null(), &destination);
+    } else {
+        sdl2::sys::SDL_RenderCopy(renderer.raw(), tex2.raw(), std::ptr::null(), std::ptr::null());
+    }
 
     sdl2::sys::SDL_SetRenderTarget(renderer.raw(), std::ptr::null_mut());
 

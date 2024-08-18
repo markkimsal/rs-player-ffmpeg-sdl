@@ -3,6 +3,9 @@ use std::{ops::Deref, sync::Mutex, collections::VecDeque};
 
 use log::{error, info};
 use rusty_ffmpeg::ffi::{self};
+
+use crate::filter::init_filter;
+
 #[repr(C)]
 pub struct MovieState {
     pub format_context: Mutex<FormatContextWrapper>,
@@ -111,8 +114,51 @@ impl MovieState {
         if pq.len() <= 0 {
             return None
         }
-        return pq.pop_front();
+        pq.pop_front()
     }
+
+    pub fn dequeue_frame_raw(&mut self) -> Option<*mut ffi::AVFrame> {
+        if (self.step == false && self.is_paused()) {
+            return None;
+        }
+        if (self.step) {
+            self.step = false;
+        }
+        let mut pq = self.picq.lock().unwrap();
+        if pq.len() <= 0 {
+            return None
+        }
+        unsafe {
+            let dest_frame = 
+                ffi::av_frame_alloc()
+                .as_mut()
+                .expect("failed to allocated memory for AVFrame");
+
+            let frame = pq.pop_front().unwrap();
+            let mut in_vfilter = self.in_vfilter.lock().unwrap();
+            let mut out_vfilter = self.out_vfilter.lock().unwrap();
+            let mut vgraph = self.vgraph.lock().unwrap();
+
+            if in_vfilter.is_null() || out_vfilter.is_null() {
+                let rotation = 0;
+                init_filter(
+                    rotation,
+                    &mut vgraph.ptr,
+                    &mut out_vfilter.ptr,
+                    &mut in_vfilter.ptr,
+                    (
+                        frame.ptr.as_ref().unwrap().width,
+                        frame.ptr.as_ref().unwrap().height,
+                    ),
+                    frame.ptr.as_ref().unwrap().format,
+                );
+            }
+            ffi::av_buffersrc_add_frame(in_vfilter.ptr, frame.ptr);
+            ffi::av_buffersink_get_frame_flags(out_vfilter.ptr, dest_frame, 0);
+            return Some(dest_frame);
+        }
+    }
+
     pub fn peek_frame_pts(&self) -> Option<i64> {
         let pq = self.picq.lock().unwrap();
         if pq.len() <= 0 {
@@ -122,12 +168,13 @@ impl MovieState {
         unsafe {Some(front.ptr.as_ref().unwrap().pts)}
     }
 
-    pub fn pause(&self) {
+    pub fn pause(&mut self) {
         let state = self.paused.load(std::sync::atomic::Ordering::Relaxed);
         self.paused.store(!state, std::sync::atomic::Ordering::Relaxed);
+        self.last_pts = ffi::AV_NOPTS_VALUE;
     }
 
-    pub fn is_paused(&self) -> bool{
+    pub fn is_paused(&self) -> bool {
         self.paused.load(std::sync::atomic::Ordering::Relaxed)
     }
 
