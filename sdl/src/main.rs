@@ -56,8 +56,8 @@ pub unsafe fn init_subsystem<'sdl>(
         .window("rs-player-ffmpeg-sdl2", default_width, default_height)
         .resizable()
         .position_centered()
-        .set_window_flags(window_flags)
-        .borderless()
+        // .set_window_flags(window_flags)
+        // .borderless()
         .build()
         .unwrap();
 
@@ -272,14 +272,15 @@ pub unsafe fn event_loop(
             subsystem.is_recording,
         );
 
-        if analyzer_ctx.is_paused() == true {
-            std::thread::yield_now();
-            screen_cap(subsystem, &mut record_tx, i);
-            continue;
-        }
+        // if analyzer_ctx.is_paused() == true {
+        //     std::thread::yield_now();
+        //     screen_cap(subsystem, &mut record_tx, i);
+        //     continue;
+        // }
 
 
         // for movie in analyzer_ctx.movie_list { //}.iter().enumerate().for_each(|(index, movie)| {
+        if analyzer_ctx.is_paused() == false || analyzer_ctx.force_render == false {
         for index in 0..analyzer_ctx.movie_count() {
             if let (index, Some(dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
                 if index == 0 {
@@ -289,6 +290,8 @@ pub unsafe fn event_loop(
             // info!("got pts for movie index {}", index);
                     frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture2).unwrap_or_default();
                 }
+                // let m: Option<&mut MovieState> = analyzer_ctx.movie_list.get_mut(index as usize) as Option<&mut MovieState>;
+                // m.unwrap().update_last_time(unsafe {ffi::av_gettime_relative()});
                 // texture_to_texture(
                 //     &mut movie_texture,
                 //     &mut subsystem.canvas,
@@ -297,7 +300,9 @@ pub unsafe fn event_loop(
                 ffi::av_frame_unref(dest_frame as *mut _);
             };
         };
-        ::std::thread::sleep(std::time::Duration::from_secs_f64(0.0001));
+        }
+        ::std::thread::yield_now();
+        // ::std::thread::sleep(std::time::Duration::from_secs_f64(0.0001));
  
         // analyzer_ctx.movie_list.iter_mut().enumerate().for_each(|(index, movie)| {
         //     if let Some(dest_frame) = movie.dequeue_frame_raw() {
@@ -333,6 +338,7 @@ pub unsafe fn event_loop(
 
         // last_clock = ffi::av_gettime_relative();
         subsystem.canvas.present();
+        analyzer_ctx.force_render = false;
 
         screen_cap(subsystem, &mut record_tx, i);
         std::thread::yield_now();

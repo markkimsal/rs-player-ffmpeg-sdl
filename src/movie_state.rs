@@ -25,7 +25,8 @@ pub struct MovieState {
     pub vgraph: Mutex<FilterGraphWrapper>,
     pub video_frame_rate: ffi::AVRational,
     pub last_pts: i64,
-    pub last_pts_time: i64,
+    pub last_pts_time: f64,
+    pub last_display_time: f64,
     pub step: bool,
 }
 impl Drop for MovieState {
@@ -70,7 +71,8 @@ impl MovieState {
             vgraph: Mutex::new(FilterGraphWrapper { ptr: vgraph }),
             video_frame_rate: ffi::AVRational { num: 1, den: 60 },
             last_pts: ffi::AV_NOPTS_VALUE,
-            last_pts_time: 0,
+            last_pts_time: 0.,
+            last_display_time: 0.,
             step: false,
         }
     }
@@ -187,6 +189,15 @@ impl MovieState {
 
     pub fn step_force(&mut self) {
         self.step = true;
+    }
+
+    pub fn update_last_pts_time(&mut self, pts: i64) {
+        let time_base = unsafe {(*(self.video_stream.lock().unwrap()).ptr).time_base};
+        self.last_pts_time = pts as f64  * time_base.num as f64 / time_base.den as f64;
+    }
+
+    pub fn update_last_time(&mut self, t: i64) {
+        self.last_pts_time = (t as f64) / 1_000_000.;
     }
 
 }
