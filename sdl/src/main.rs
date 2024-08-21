@@ -102,6 +102,8 @@ fn main() {
         open_movie(&mut analyzer_ctx, filepath.as_ptr());
         open_movie(&mut analyzer_ctx, filepath.as_ptr());
         // let tx = play_movie(&mut analyzer_ctx);
+
+        analyzer_ctx.set_loop(false);
         let tx = start_analyzer(&mut analyzer_ctx);
         event_loop(&mut analyzer_ctx, &mut subsystem, tx);
         AnalyzerContext::close(analyzer_ctx);
@@ -301,10 +303,10 @@ pub unsafe fn event_loop(
 
         if nearest_frame < 0. {
             ::std::thread::sleep(std::time::Duration::from_secs_f64(frame_remaining));
+            ::std::thread::yield_now();
             continue;
         }
         if nearest_frame > 0. {
-            // info!("sleeping partial frame {}", nearest_frame);
             ::std::thread::sleep(std::time::Duration::from_secs_f64((nearest_frame - 0.0001).max(0.)));
         }
         }
@@ -346,7 +348,7 @@ pub unsafe fn event_loop(
         analyzer_ctx.force_render = false;
 
         screen_cap(subsystem, &mut record_tx, i);
-        // ::std::thread::yield_now();
+        ::std::thread::yield_now();
     }
     drop(tx);
     drop(record_tx);

@@ -23,6 +23,7 @@ pub struct AnalyzerContext {
     pub clock: Clock,
     pub force_render: bool,
     thread_handle: Option<JoinHandle<()>>,
+    do_loop: bool,
 }
 
 impl AnalyzerContext {
@@ -33,6 +34,7 @@ impl AnalyzerContext {
             clock: Clock{ paused: false, pts: AV_NOPTS_VALUE, speed: 1.0, ..Default::default() },
             force_render: true,
             thread_handle: None,
+            do_loop: true,
         }
     }
 }
@@ -231,6 +233,14 @@ impl AnalyzerContext {
 
     pub fn set_thread_handle(&mut self, handle: JoinHandle<()>) {
         self.thread_handle = Some(handle);
+    }
+
+    pub fn set_loop(&mut self, do_loop: bool) {
+        self.do_loop = do_loop;
+    }
+
+    pub fn get_loop(&self) -> bool {
+        self.do_loop
     }
 }
 

@@ -28,10 +28,16 @@ pub unsafe extern "C" fn new_movie_state() -> *mut MovieState {
     Box::into_raw(Box::new(MovieState::new())) as *mut MovieState
 }
 #[no_mangle]
+pub unsafe extern "C" fn new_player_state() -> *mut AnalyzerContext {
+    Box::into_raw(Box::new(AnalyzerContext::new())) as *mut AnalyzerContext
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn drop_movie_state(movie_state: *mut MovieState) {
     drop(Box::<MovieState>::from_raw(movie_state));
 }
 
+#[no_mangle]
 pub unsafe extern "C" fn drop_analyzer_state(analyzer_ctx: *mut AnalyzerContext) {
     let a = Box::<AnalyzerContext>::from_raw(analyzer_ctx);
     // AnalyzerContext::close(a.deref().deref());
@@ -221,6 +227,9 @@ pub unsafe extern "C" fn start_analyzer(analyzer_ptr: *mut AnalyzerContext) -> S
             let cur_thread = PACKET_THREADS.remove(0);
             cur_thread.join().unwrap();
         }
+        for x in PACKET_THREADS.drain(0..PACKET_THREADS.len()) {
+            drop(x);
+        }
     });
     let analyzer_ctx = analyzer_ptr.as_mut().unwrap();
     analyzer_ctx.set_thread_handle(decoder_handle);
@@ -242,9 +251,11 @@ pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) -> Sender<Stri
 
     let keep_running2  = std::sync::Arc::clone(&keep_running);
 
+    let do_loop          = std::sync::Arc::new(false);
     PACKET_THREADS.push(
         Box::new(std::thread::spawn(move || packet_thread_spawner(
             std::sync::Arc::clone(&keep_running2),
+            std::sync::Arc::clone(&do_loop),
             movie_state1.video_stream_idx,
             movie_state1,
         )))
@@ -329,6 +340,7 @@ unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) 
 
 fn packet_thread_spawner(
     keep_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    do_loop:std::sync::Arc<bool>,
     video_stream_idx: i64,
     movie_state: Arc<&mut MovieState>
 ) {
@@ -344,6 +356,10 @@ fn packet_thread_spawner(
                 println!("{}", String::from(
                     "EOF",
                 ));
+                if !*do_loop {
+                    ffi::av_packet_unref(packet);
+                    return;
+                }
                 let seek_ret = ffi::av_seek_frame(movie_state.format_context.lock().unwrap().ptr, movie_state.video_stream_idx as i32, 0, ffi::AVSEEK_FLAG_BACKWARD as i32);
                 if seek_ret < 0 {
                     eprintln!("📽📽  failed to seek backwards: ");
@@ -368,7 +384,6 @@ fn packet_thread_spawner(
             {
                 if video_stream_idx == packet.stream_index as i64 {
                     while let Err(_) = movie_state_enqueue_packet(&movie_state.videoqueue, packet) {
-                        // ::std::thread::yield_now();
                         ::std::thread::sleep(::std::time::Duration::from_millis(70));
                         if !keep_running.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
