@@ -361,8 +361,8 @@ fn packet_thread_spawner(
             {
                 if video_stream_idx == packet.stream_index as i64 {
                     while let Err(_) = movie_state_enqueue_packet(&movie_state.videoqueue, packet) {
-                        // ::std::thread::sleep(Duration::from_millis(4));
-                        ::std::thread::yield_now();
+                        // ::std::thread::yield_now();
+                        ::std::thread::sleep(::std::time::Duration::from_millis(70));
                         if !keep_running.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
                         }

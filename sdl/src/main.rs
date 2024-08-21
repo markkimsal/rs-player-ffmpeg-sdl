@@ -290,19 +290,10 @@ pub unsafe fn event_loop(
                     nearest_frame = remaining;
                 }
                 if index == 0 {
-            // info!("got pts for movie index {}", index);
                     frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture).unwrap_or_default();
                 } else {
-            // info!("got pts for movie index {}", index);
                     frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture2).unwrap_or_default();
                 }
-                // let m: Option<&mut MovieState> = analyzer_ctx.movie_list.get_mut(index as usize) as Option<&mut MovieState>;
-                // m.unwrap().update_last_time(unsafe {ffi::av_gettime_relative()});
-                // texture_to_texture(
-                //     &mut movie_texture,
-                //     &mut subsystem.canvas,
-                //     &mut texture,
-                // ).unwrap_or_default();
                 ffi::av_frame_unref(dest_frame as *mut _);
                 ffi::av_frame_free(&mut dest_frame as *mut *mut _);
             };
@@ -310,7 +301,10 @@ pub unsafe fn event_loop(
 
         if nearest_frame < 0. {
             ::std::thread::sleep(std::time::Duration::from_secs_f64(frame_remaining));
-        } else {
+            continue;
+        }
+        if nearest_frame > 0. {
+            // info!("sleeping partial frame {}", nearest_frame);
             ::std::thread::sleep(std::time::Duration::from_secs_f64((nearest_frame - 0.0001).max(0.)));
         }
         }
@@ -352,7 +346,7 @@ pub unsafe fn event_loop(
         analyzer_ctx.force_render = false;
 
         screen_cap(subsystem, &mut record_tx, i);
-        // std::thread::yield_now();
+        // ::std::thread::yield_now();
     }
     drop(tx);
     drop(record_tx);

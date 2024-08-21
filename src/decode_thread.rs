@@ -1,5 +1,6 @@
-use ::std::{sync::{atomic::AtomicBool, Arc, Mutex}, time::Duration};
+use ::std::sync::{atomic::AtomicBool, Arc, Mutex};
 
+#[allow(unused_imports)]
 use ::log::{debug, error};
 use ::rusty_ffmpeg::ffi;
 
@@ -22,8 +23,8 @@ pub unsafe fn decode_thread(movie_state: Arc<&mut MovieState>, keep_running: Arc
 
                 // this returns an error when the queue is full.
                 while let Err(_) = movie_state_enqueue_frame(&movie_state.picq, frame) {
-                    ::std::thread::yield_now();
-                    ::std::thread::sleep(Duration::from_millis(4));
+                    // ::std::thread::yield_now();
+                    ::std::thread::sleep(::std::time::Duration::from_millis(70));
                     if ! keep_running.load(std::sync::atomic::Ordering::Relaxed) {
                         break;
                     }

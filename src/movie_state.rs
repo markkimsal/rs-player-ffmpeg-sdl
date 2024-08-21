@@ -34,8 +34,8 @@ impl Drop for MovieState {
     fn drop(&mut self) {
         // claim lock to drain other threads
         {
+            info!("free video codec context");
             let mut video_ctx = self.video_ctx.lock().unwrap();
-            info!("dropping video_ctx allocated with avcodec_alloc_context3");
             unsafe {ffi::avcodec_free_context(&mut video_ctx.ptr as *mut *mut _);}
             unsafe {ffi::av_free(video_ctx.ptr as *mut _);}
             drop(video_ctx);
@@ -105,7 +105,7 @@ impl MovieState {
         let mut vq = self.videoqueue.lock().unwrap();
 
         vq.iter_mut().for_each(|p| unsafe {
-            info!("free packet left in queue.");
+            info!("free packet left in queue");
             ffi::av_packet_free(&mut p.ptr as *mut *mut _);
         });
         vq.clear();
@@ -116,7 +116,7 @@ impl MovieState {
         let mut pq = self.picq.lock().unwrap();
 
         pq.iter_mut().for_each(|f| unsafe {
-            info!("free frame left in queue.");
+            info!("free frame left in queue");
             ffi::av_frame_free(&mut f.ptr as *mut *mut _ );
         });
         pq.clear();
