@@ -31,14 +31,20 @@ pub struct MovieState {
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
+            info!("dropping video_ctx allocated with avcodec_alloc_context3");
         // claim lock to drain other threads
         {
-            let video_ctx = self.video_ctx.lock().unwrap();
+            let mut video_ctx = self.video_ctx.lock().unwrap();
+            info!("dropping video_ctx allocated with avcodec_alloc_context3");
+            unsafe {ffi::avcodec_free_context(&mut video_ctx.ptr as *mut *mut _);}
             unsafe {ffi::av_free(video_ctx.ptr as *mut _);}
             drop(video_ctx);
         }
         {
             self.clear_packet_queue().unwrap();
+        }
+        {
+            self.clear_frame_queue().unwrap();
         }
         {
             let mut format_ctx = self.format_context.lock().unwrap();
@@ -95,9 +101,21 @@ impl MovieState {
         let mut vq = self.videoqueue.lock().unwrap();
 
         vq.iter_mut().for_each(|p| unsafe {
-            ffi::av_packet_free(&mut p.ptr);
+            info!("free packet left in queue.");
+            ffi::av_packet_free(&mut p.ptr as *mut *mut _);
         });
         vq.clear();
+        return Ok(());
+    }
+
+    pub fn clear_frame_queue(&mut self) -> Result<(), ()> {
+        let mut pq = self.picq.lock().unwrap();
+
+        pq.iter_mut().for_each(|f| unsafe {
+            info!("free frame left in queue.");
+            ffi::av_frame_free(&mut f.ptr as *mut *mut _ );
+        });
+        pq.clear();
         return Ok(());
     }
 
