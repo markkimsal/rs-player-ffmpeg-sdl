@@ -1,5 +1,5 @@
 #![allow(unused_variables, dead_code, unused)]
-use ::std::slice::Iter;
+use ::std::{ops::Deref, slice::Iter, thread::JoinHandle};
 
 use log::debug;
 use ::log::info;
@@ -22,6 +22,7 @@ pub struct AnalyzerContext {
     pub paused: std::sync::atomic::AtomicBool,
     pub clock: Clock,
     pub force_render: bool,
+    thread_handle: Option<JoinHandle<()>>,
 }
 
 impl AnalyzerContext {
@@ -31,6 +32,7 @@ impl AnalyzerContext {
             paused: std::sync::atomic::AtomicBool::new(true),
             clock: Clock{ paused: false, pts: AV_NOPTS_VALUE, speed: 1.0, ..Default::default() },
             force_render: true,
+            thread_handle: None,
         }
     }
 }
@@ -45,16 +47,18 @@ impl AnalyzerContext {
         self.movie_list.len() as u8
     }
 
-    pub fn dequeue_frame(&mut self, movie_index: u8) -> (u8, Option<*mut ffi::AVFrame>) {
+    pub fn dequeue_frame(&mut self, movie_index: u8) -> (f64, Option<*mut ffi::AVFrame>) {
         if self.movie_list.len() == 0 {
-            return (0, None);
+            return (0., None);
         }
-        if let (index, Some(pts)) = self.peek_movie_state_packet(movie_index as _) {
+        let mut frame_delay = 0.;
+        if let (delay, Some(pts)) = self.peek_movie_state_packet(movie_index as _) {
             if pts != 0 && self.is_paused() {
-                return (index, None);
+                return (0., None);
             }
+            frame_delay = delay;
         } else {
-            return (0, None)
+            return (0., None)
         }
         let mut dest_frame = unsafe {
             ffi::av_frame_alloc()
@@ -64,7 +68,7 @@ impl AnalyzerContext {
 
         let movie_state: &MovieState = self.movie_list.get(movie_index as usize).unwrap();
         unsafe {
-        if let Some(frame) = movie_state.dequeue_frame() {
+        if let Some(mut frame) = movie_state.dequeue_frame() {
                 
             let mut in_vfilter = movie_state.in_vfilter.lock().unwrap();
             let mut out_vfilter = movie_state.out_vfilter.lock().unwrap();
@@ -90,15 +94,16 @@ impl AnalyzerContext {
             }
             ffi::av_buffersrc_add_frame(in_vfilter.ptr, frame.ptr);
             ffi::av_buffersink_get_frame_flags(out_vfilter.ptr, dest_frame, 0);
-            return (movie_index as _, Some(dest_frame));
+            unsafe { ffi::av_frame_free(&mut frame as *mut _ as *mut _) };
+            return (frame_delay as _, Some(dest_frame));
         }
         }
         unsafe { ffi::av_frame_free(&mut dest_frame as *mut _ as *mut _) };
-        (0, None)
+        (0., None)
 
     }
 
-    fn peek_movie_state_packet(&mut self, movie_index: usize) -> (u8, Option<i64>) {
+    fn peek_movie_state_packet(&mut self, movie_index: usize) -> (f64, Option<i64>) {
         let movie_state = self.movie_list.get_mut(movie_index).unwrap();
         // for (index, movie_state) in self.movie_list.iter_mut().enumerate() {
             if movie_state.step {
@@ -141,7 +146,7 @@ impl AnalyzerContext {
                 }
                 if delay > 0.0001 {
                     // TODO: check other movie_states to see if any other frame is ready for display
-                    ::std::thread::sleep(std::time::Duration::from_secs_f64((delay - 0.0001).max(0.)));
+                    // ::std::thread::sleep(std::time::Duration::from_secs_f64((delay - 0.0001).max(0.)));
                     // return (0, None);
                     // continue;
                 }
@@ -159,9 +164,11 @@ impl AnalyzerContext {
                     // movie_state.last_pts_time = pts_time;
                     let mut f = movie_state.dequeue_frame().unwrap();
                     unsafe { ffi::av_frame_free(&mut f.ptr as *mut _ as *mut _) };
+
+                        return (0., None);
                     retry_count += 1;
                     if retry_count == 5 {
-                        return (0, None);
+                        return (0., None);
                     }
                     continue 'retry;
                }
@@ -173,10 +180,10 @@ impl AnalyzerContext {
                    self.clock.pts = movie_state.last_pts;
                }
                self.clock.last_updated = current_clock;
-               return (movie_index as _, Some(pts));
+               return (delay as _, Some(pts));
                }
             }
-        (0, None)
+        (0., None)
     }
 
     pub fn step(&mut self) {
@@ -202,10 +209,13 @@ impl AnalyzerContext {
         self.paused.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn close(&mut self) {
+    pub fn close(mut this: Self) {
         info!("closing analyzer...");
-        while let Some(movie) = self.movie_list.pop() {
-            info!("dropping movie \n");
+        this.thread_handle.unwrap().join().unwrap();
+        // if let Some(handle) = this.thread_handle.as_ref() {
+        //     handle.join().unwrap();
+        // }
+        while let Some(movie) = this.movie_list.pop() {
             drop(movie);
         }
     }
@@ -213,4 +223,20 @@ impl AnalyzerContext {
     pub fn movie_list_iter(&self) -> Iter<MovieState> {
         return self.movie_list.iter();
     }
+
+    pub fn set_thread_handle(&mut self, handle: JoinHandle<()>) {
+        self.thread_handle = Some(handle);
+    }
 }
+
+
+// impl Into<AnalyzerContext> for &AnalyzerContext {
+//     fn into(self) -> AnalyzerContext {
+//         self.deref()
+//     }
+// }
+// impl From<&AnalyzerContext> for AnalyzerContext {
+//     fn from(item: &AnalyzerContext) -> Self {
+//         *item
+//     }
+// }

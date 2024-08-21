@@ -104,8 +104,9 @@ fn main() {
         // let tx = play_movie(&mut analyzer_ctx);
         let tx = start_analyzer(&mut analyzer_ctx);
         event_loop(&mut analyzer_ctx, &mut subsystem, tx);
-        analyzer_ctx.close();
-        drop(analyzer_ctx);
+        AnalyzerContext::close(analyzer_ctx);
+        // analyzer_ctx.close();
+        // drop(analyzer_ctx);
     }
 }
 pub unsafe fn event_loop(
@@ -283,8 +284,13 @@ pub unsafe fn event_loop(
 
         // for movie in analyzer_ctx.movie_list { //}.iter().enumerate().for_each(|(index, movie)| {
         if analyzer_ctx.is_paused() == false || analyzer_ctx.force_render == false {
+        let mut frame_remaining = 1./60.;
+        let mut nearest_frame = 0.;
         for index in 0..analyzer_ctx.movie_count() {
-            if let (index, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
+            if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
+                if nearest_frame < remaining {
+                    nearest_frame = remaining;
+                }
                 if index == 0 {
             // info!("got pts for movie index {}", index);
                     frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture).unwrap_or_default();
@@ -303,9 +309,9 @@ pub unsafe fn event_loop(
                 ffi::av_frame_free(&mut dest_frame as *mut *mut _);
             };
         };
+
+        ::std::thread::sleep(std::time::Duration::from_secs_f64((nearest_frame - 0.0001).max(0.)));
         }
-        ::std::thread::yield_now();
-        // ::std::thread::sleep(std::time::Duration::from_secs_f64(0.0001));
  
         // analyzer_ctx.movie_list.iter_mut().enumerate().for_each(|(index, movie)| {
         //     if let Some(dest_frame) = movie.dequeue_frame_raw() {
@@ -344,7 +350,7 @@ pub unsafe fn event_loop(
         analyzer_ctx.force_render = false;
 
         screen_cap(subsystem, &mut record_tx, i);
-        std::thread::yield_now();
+        // std::thread::yield_now();
     }
     drop(tx);
     drop(record_tx);
