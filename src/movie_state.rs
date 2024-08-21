@@ -6,6 +6,7 @@ use rusty_ffmpeg::ffi::{self};
 
 use crate::filter::init_filter;
 
+static PACKET_QUEUE_SIZE: usize = 4;
 #[repr(C)]
 pub struct MovieState {
     pub format_context: Mutex<FormatContextWrapper>,
@@ -31,7 +32,6 @@ pub struct MovieState {
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
-            info!("dropping video_ctx allocated with avcodec_alloc_context3");
         // claim lock to drain other threads
         {
             let mut video_ctx = self.video_ctx.lock().unwrap();
@@ -50,6 +50,10 @@ impl Drop for MovieState {
             let mut format_ctx = self.format_context.lock().unwrap();
             unsafe {ffi::avformat_close_input(&mut format_ctx.ptr);}
         }
+        {
+            let mut vgraph = self.vgraph.lock().unwrap();
+            unsafe {ffi::avfilter_graph_free(&mut vgraph.ptr as *mut *mut _);}
+        }
 
         // make sure its empty after giving up the lock
         assert!(self.videoqueue.lock().unwrap().is_empty());
@@ -66,7 +70,7 @@ impl MovieState {
             audio_stream: Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()}),
             audio_ctx: Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()}),
             audio_buf: [0; 1024 * 1024],
-            videoqueue: Mutex::new(VecDeque::with_capacity(10)),
+            videoqueue: Mutex::new(VecDeque::with_capacity(PACKET_QUEUE_SIZE)),
             // audio_pkt: std::ptr::null_mut(),
             video_stream: Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()}),
             video_ctx: Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()}),
@@ -90,7 +94,7 @@ impl MovieState {
     }
     pub fn enqueue_packet(&self, packet: *mut ffi::AVPacket) -> Result<(), ()> {
         let mut vq = self.videoqueue.lock().unwrap();
-        if vq.len() >= 10 {
+        if vq.len() >= PACKET_QUEUE_SIZE {
             return Err(());
         }
         vq.push_back(PacketWrapper{ptr:packet});
@@ -160,6 +164,7 @@ impl MovieState {
             let mut vgraph = self.vgraph.lock().unwrap();
 
             if in_vfilter.is_null() || out_vfilter.is_null() {
+                ffi::avfilter_graph_free(&mut vgraph.ptr as *mut *mut _);
                 let rotation = 0;
                 init_filter(
                     rotation,
@@ -221,7 +226,7 @@ impl MovieState {
 }
 pub fn movie_state_enqueue_packet(videoqueue: &Mutex<VecDeque<PacketWrapper>>, packet: *mut ffi::AVPacket) -> Result<(), ()> {
     let mut vq = videoqueue.lock().unwrap();
-    if vq.len() >= 10 {
+    if vq.len() >= PACKET_QUEUE_SIZE {
         return Err(());
     }
     vq.push_back(PacketWrapper{ptr:packet});
@@ -236,6 +241,7 @@ pub fn movie_state_enqueue_frame(picq: &Mutex<VecDeque<FrameWrapper>>, frame: *m
     }
     unsafe {
         let clone_frame = ffi::av_frame_clone(frame);
+        unsafe { ffi::av_frame_unref(frame as *mut _); }
         pq.push_back(FrameWrapper{ptr:clone_frame});
     }
     return Ok(());
