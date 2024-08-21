@@ -170,28 +170,35 @@ unsafe impl Send for Storage<'_>{}
 pub unsafe extern "C" fn start_analyzer(analyzer_ptr: *mut AnalyzerContext) -> Sender<String> {
     let analyzer_ctx = analyzer_ptr.as_mut().unwrap();
 
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let (tx, rx)     = std::sync::mpsc::channel::<String>();
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let do_loop      = std::sync::Arc::new(analyzer_ctx.get_loop());
 
     for movie_state in analyzer_ctx.movie_list.iter_mut() {
-        let movie_state_arc  = std::sync::Arc::new(movie_state);
-        let movie_state1     = std::sync::Arc::clone(&movie_state_arc);
+        let movie_state_arc = std::sync::Arc::new(movie_state);
+        let movie_state1    = std::sync::Arc::clone(&movie_state_arc);
+        let do_loop         = std::sync::Arc::clone(&do_loop);
 
         let keep_running2  = std::sync::Arc::clone(&keep_running);
         PACKET_THREADS.push(
-            Box::new(std::thread::spawn(move || packet_thread_spawner(
+            Box::new(std::thread::Builder::new()
+            .name("packet thread".to_owned())
+            .spawn(move || packet_thread_spawner(
                 std::sync::Arc::clone(&keep_running2),
+                do_loop,
                 movie_state1.video_stream_idx,
                 movie_state1,
-            )))
+            )).unwrap())
         );
 
         let keep_running3  = std::sync::Arc::clone(&keep_running);
         let movie_state2   = std::sync::Arc::clone(&movie_state_arc);
         DECODE_THREADS.push(
-            Box::new(std::thread::spawn(move || {
+            Box::new(std::thread::Builder::new()
+            .name("decode thread".to_owned())
+            .spawn(move || {
                 decode_thread(movie_state2, keep_running3)
-            }))
+            }).unwrap())
         );
     }
 

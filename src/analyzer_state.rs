@@ -171,17 +171,22 @@ impl AnalyzerContext {
                         return (0., None);
                     }
                     continue 'retry;
-               }
+                }
 
-               movie_state.last_pts      = pts;
-               movie_state.last_display_time = current_clock as f64 / 1_000_000.;
-               // next frame's delay is based on only the latest pts
-               if self.clock.pts < movie_state.last_pts {
+                movie_state.last_pts      = pts;
+                movie_state.last_display_time = current_clock as f64 / 1_000_000.;
+                // next frame's delay is based on only the latest pts
+                if self.clock.pts < movie_state.last_pts {
                    self.clock.pts = movie_state.last_pts;
-               }
-               self.clock.last_updated = current_clock;
-               return (delay as _, Some(pts));
-               }
+                }
+                self.clock.last_updated = current_clock;
+                return (delay as _, Some(pts));
+                }
+                return (0., None);
+                // ::std::thread::yield_now();
+                // ::std::thread::sleep(std::time::Duration::from_millis( 10 ));
+                // return (0., None)
+                // ::std::thread::sleep(std::time::Duration::from_secs_f64( 0.01 ));
             }
         (0., None)
     }
