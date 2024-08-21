@@ -103,7 +103,9 @@ fn main() {
         open_movie(&mut analyzer_ctx, filepath.as_ptr());
         // let tx = play_movie(&mut analyzer_ctx);
         let tx = start_analyzer(&mut analyzer_ctx);
-        event_loop(&mut analyzer_ctx, &mut subsystem, tx)
+        event_loop(&mut analyzer_ctx, &mut subsystem, tx);
+        analyzer_ctx.close();
+        drop(analyzer_ctx);
     }
 }
 pub unsafe fn event_loop(
@@ -282,7 +284,7 @@ pub unsafe fn event_loop(
         // for movie in analyzer_ctx.movie_list { //}.iter().enumerate().for_each(|(index, movie)| {
         if analyzer_ctx.is_paused() == false || analyzer_ctx.force_render == false {
         for index in 0..analyzer_ctx.movie_count() {
-            if let (index, Some(dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
+            if let (index, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
                 if index == 0 {
             // info!("got pts for movie index {}", index);
                     frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture).unwrap_or_default();
@@ -298,6 +300,7 @@ pub unsafe fn event_loop(
                 //     &mut texture,
                 // ).unwrap_or_default();
                 ffi::av_frame_unref(dest_frame as *mut _);
+                ffi::av_frame_free(&mut dest_frame as *mut *mut _);
             };
         };
         }

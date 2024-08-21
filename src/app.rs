@@ -11,6 +11,7 @@ use log::info;
 use rusty_ffmpeg::ffi;
 
 
+use crate::analyzer_state;
 use crate::analyzer_state::AnalyzerContext;
 use crate::decode_thread::decode_thread;
 use crate::movie_state::movie_state_enqueue_packet;
@@ -31,6 +32,13 @@ pub unsafe extern "C" fn new_movie_state() -> *mut MovieState {
 pub unsafe extern "C" fn drop_movie_state(movie_state: *mut MovieState) {
     drop(Box::<MovieState>::from_raw(movie_state));
 }
+
+pub unsafe extern "C" fn drop_analyzer_state(analyzer_ctx: *mut AnalyzerContext) {
+    let mut a = Box::<AnalyzerContext>::from_raw(analyzer_ctx);
+    a.close();
+    drop(a);
+}
+
 
 #[no_mangle]
 pub unsafe extern "C" fn a_function_from_rust() -> i32 {
@@ -159,8 +167,8 @@ unsafe impl Send for Storage<'_>{}
 /// this should only be called from the calling app's main UI thread
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
-pub unsafe extern "C" fn start_analyzer(analyzer_ctx: *mut AnalyzerContext) -> Sender<String> {
-    let analyzer_ctx = analyzer_ctx.as_mut().unwrap();
+pub unsafe extern "C" fn start_analyzer(analyzer_ptr: *mut AnalyzerContext) -> Sender<String> {
+    let analyzer_ctx = analyzer_ptr.as_mut().unwrap();
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -242,6 +250,7 @@ pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) -> Sender<Stri
         }))
     );
 
+
     std::thread::spawn(move || {
         // when all tx refs are dropped, this rx will close
         for msg in rx {
@@ -322,7 +331,6 @@ fn packet_thread_spawner(
             let packet = ffi::av_packet_alloc().as_mut()
                 .expect("failed to allocated memory for AVPacket");
             let response = ffi::av_read_frame(movie_state.format_context.lock().unwrap().ptr, packet);
-            // if response == ffi::AVERROR(ffi::EAGAIN) || response == ffi::AVERROR_EOF {
             if response == ffi::AVERROR_EOF {
                 println!("{}", String::from(
                     "EOF",
@@ -343,7 +351,7 @@ fn packet_thread_spawner(
                 println!("{}", String::from(
                     "ERROR",
                 ));
-                // *keep_running2.get_mut() = false;
+                ffi::av_packet_unref(packet);
                 keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
                 return;
                 // break 'running;
