@@ -108,7 +108,7 @@ impl AnalyzerContext {
         // for (index, movie_state) in self.movie_list.iter_mut().enumerate() {
             if movie_state.step {
                 movie_state.step = false;
-                return (movie_index as _, Some(0));
+                return (0. as _, Some(0));
             }
             let mut current_clock = unsafe {ffi::av_gettime_relative()};
             let mut retry_count = 0;
