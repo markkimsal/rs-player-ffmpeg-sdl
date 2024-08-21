@@ -281,11 +281,9 @@ pub unsafe fn event_loop(
         //     continue;
         // }
 
-
-        // for movie in analyzer_ctx.movie_list { //}.iter().enumerate().for_each(|(index, movie)| {
         if analyzer_ctx.is_paused() == false || analyzer_ctx.force_render == false {
         let mut frame_remaining = 1./60.;
-        let mut nearest_frame = 0.;
+        let mut nearest_frame = -1.;
         for index in 0..analyzer_ctx.movie_count() {
             if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
                 if nearest_frame < remaining {
@@ -310,7 +308,11 @@ pub unsafe fn event_loop(
             };
         };
 
-        ::std::thread::sleep(std::time::Duration::from_secs_f64((nearest_frame - 0.0001).max(0.)));
+        if nearest_frame < 0. {
+            ::std::thread::sleep(std::time::Duration::from_secs_f64(frame_remaining));
+        } else {
+            ::std::thread::sleep(std::time::Duration::from_secs_f64((nearest_frame - 0.0001).max(0.)));
+        }
         }
  
         // analyzer_ctx.movie_list.iter_mut().enumerate().for_each(|(index, movie)| {
