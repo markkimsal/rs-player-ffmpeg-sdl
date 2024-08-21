@@ -3,6 +3,10 @@ use std::{ops::Deref, sync::Mutex, collections::VecDeque};
 
 use log::{error, info};
 use rusty_ffmpeg::ffi::{self};
+
+use crate::filter::init_filter;
+
+static PACKET_QUEUE_SIZE: usize = 4;
 #[repr(C)]
 pub struct MovieState {
     pub format_context: Mutex<FormatContextWrapper>,
@@ -22,14 +26,17 @@ pub struct MovieState {
     pub vgraph: Mutex<FilterGraphWrapper>,
     pub video_frame_rate: ffi::AVRational,
     pub last_pts: i64,
-    pub last_pts_time: i64,
+    pub last_pts_time: f64,
+    pub last_display_time: f64,
     pub step: bool,
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
         // claim lock to drain other threads
         {
-            let video_ctx = self.video_ctx.lock().unwrap();
+            let mut video_ctx = self.video_ctx.lock().unwrap();
+            info!("dropping video_ctx allocated with avcodec_alloc_context3");
+            unsafe {ffi::avcodec_free_context(&mut video_ctx.ptr as *mut *mut _);}
             unsafe {ffi::av_free(video_ctx.ptr as *mut _);}
             drop(video_ctx);
         }
@@ -37,8 +44,15 @@ impl Drop for MovieState {
             self.clear_packet_queue().unwrap();
         }
         {
+            self.clear_frame_queue().unwrap();
+        }
+        {
             let mut format_ctx = self.format_context.lock().unwrap();
             unsafe {ffi::avformat_close_input(&mut format_ctx.ptr);}
+        }
+        {
+            let mut vgraph = self.vgraph.lock().unwrap();
+            unsafe {ffi::avfilter_graph_free(&mut vgraph.ptr as *mut *mut _);}
         }
 
         // make sure its empty after giving up the lock
@@ -56,7 +70,7 @@ impl MovieState {
             audio_stream: Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()}),
             audio_ctx: Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()}),
             audio_buf: [0; 1024 * 1024],
-            videoqueue: Mutex::new(VecDeque::with_capacity(10)),
+            videoqueue: Mutex::new(VecDeque::with_capacity(PACKET_QUEUE_SIZE)),
             // audio_pkt: std::ptr::null_mut(),
             video_stream: Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()}),
             video_ctx: Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()}),
@@ -67,7 +81,8 @@ impl MovieState {
             vgraph: Mutex::new(FilterGraphWrapper { ptr: vgraph }),
             video_frame_rate: ffi::AVRational { num: 1, den: 60 },
             last_pts: ffi::AV_NOPTS_VALUE,
-            last_pts_time: 0,
+            last_pts_time: 0.,
+            last_display_time: 0.,
             step: false,
         }
     }
@@ -79,7 +94,7 @@ impl MovieState {
     }
     pub fn enqueue_packet(&self, packet: *mut ffi::AVPacket) -> Result<(), ()> {
         let mut vq = self.videoqueue.lock().unwrap();
-        if vq.len() >= 10 {
+        if vq.len() >= PACKET_QUEUE_SIZE {
             return Err(());
         }
         vq.push_back(PacketWrapper{ptr:packet});
@@ -90,9 +105,21 @@ impl MovieState {
         let mut vq = self.videoqueue.lock().unwrap();
 
         vq.iter_mut().for_each(|p| unsafe {
-            ffi::av_packet_free(&mut p.ptr);
+            info!("free packet left in queue.");
+            ffi::av_packet_free(&mut p.ptr as *mut *mut _);
         });
         vq.clear();
+        return Ok(());
+    }
+
+    pub fn clear_frame_queue(&mut self) -> Result<(), ()> {
+        let mut pq = self.picq.lock().unwrap();
+
+        pq.iter_mut().for_each(|f| unsafe {
+            info!("free frame left in queue.");
+            ffi::av_frame_free(&mut f.ptr as *mut *mut _ );
+        });
+        pq.clear();
         return Ok(());
     }
 
@@ -111,8 +138,52 @@ impl MovieState {
         if pq.len() <= 0 {
             return None
         }
-        return pq.pop_front();
+        pq.pop_front()
     }
+
+    pub fn dequeue_frame_raw(&mut self) -> Option<*mut ffi::AVFrame> {
+        if (self.step == false && self.is_paused()) {
+            return None;
+        }
+        if (self.step) {
+            self.step = false;
+        }
+        let mut pq = self.picq.lock().unwrap();
+        if pq.len() <= 0 {
+            return None
+        }
+        unsafe {
+            let dest_frame = 
+                ffi::av_frame_alloc()
+                .as_mut()
+                .expect("failed to allocated memory for AVFrame");
+
+            let frame = pq.pop_front().unwrap();
+            let mut in_vfilter = self.in_vfilter.lock().unwrap();
+            let mut out_vfilter = self.out_vfilter.lock().unwrap();
+            let mut vgraph = self.vgraph.lock().unwrap();
+
+            if in_vfilter.is_null() || out_vfilter.is_null() {
+                ffi::avfilter_graph_free(&mut vgraph.ptr as *mut *mut _);
+                let rotation = 0;
+                init_filter(
+                    rotation,
+                    &mut vgraph.ptr,
+                    &mut out_vfilter.ptr,
+                    &mut in_vfilter.ptr,
+                    (
+                        frame.ptr.as_ref().unwrap().width,
+                        frame.ptr.as_ref().unwrap().height,
+                    ),
+                    frame.ptr.as_ref().unwrap().format,
+                );
+            }
+            ffi::av_buffersrc_add_frame(in_vfilter.ptr, frame.ptr);
+            ffi::av_buffersink_get_frame_flags(out_vfilter.ptr, dest_frame, 0);
+            return Some(dest_frame);
+        }
+    }
+
     pub fn peek_frame_pts(&self) -> Option<i64> {
         let pq = self.picq.lock().unwrap();
         if pq.len() <= 0 {
@@ -122,12 +193,13 @@ impl MovieState {
         unsafe {Some(front.ptr.as_ref().unwrap().pts)}
     }
 
-    pub fn pause(&self) {
+    pub fn pause(&mut self) {
         let state = self.paused.load(std::sync::atomic::Ordering::Relaxed);
         self.paused.store(!state, std::sync::atomic::Ordering::Relaxed);
+        self.last_pts = ffi::AV_NOPTS_VALUE;
     }
 
-    pub fn is_paused(&self) -> bool{
+    pub fn is_paused(&self) -> bool {
         self.paused.load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -142,10 +214,19 @@ impl MovieState {
         self.step = true;
     }
 
+    pub fn update_last_pts_time(&mut self, pts: i64) {
+        let time_base = unsafe {(*(self.video_stream.lock().unwrap()).ptr).time_base};
+        self.last_pts_time = pts as f64  * time_base.num as f64 / time_base.den as f64;
+    }
+
+    pub fn update_last_time(&mut self, t: i64) {
+        self.last_pts_time = (t as f64) / 1_000_000.;
+    }
+
 }
 pub fn movie_state_enqueue_packet(videoqueue: &Mutex<VecDeque<PacketWrapper>>, packet: *mut ffi::AVPacket) -> Result<(), ()> {
     let mut vq = videoqueue.lock().unwrap();
-    if vq.len() >= 10 {
+    if vq.len() >= PACKET_QUEUE_SIZE {
         return Err(());
     }
     vq.push_back(PacketWrapper{ptr:packet});
@@ -160,6 +241,7 @@ pub fn movie_state_enqueue_frame(picq: &Mutex<VecDeque<FrameWrapper>>, frame: *m
     }
     unsafe {
         let clone_frame = ffi::av_frame_clone(frame);
+        unsafe { ffi::av_frame_unref(frame as *mut _); }
         pq.push_back(FrameWrapper{ptr:clone_frame});
     }
     return Ok(());

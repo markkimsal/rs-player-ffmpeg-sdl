@@ -31,6 +31,7 @@ pub unsafe fn decode_thread(movie_state: Arc<&mut MovieState>, keep_running: Arc
             }
             ffi::av_frame_unref(frame as *mut _);
             ffi::av_packet_unref(packet.ptr);
+            ffi::av_packet_free(&mut packet.ptr as *mut *mut _);
             locked_videoqueue.pop_front();
         }
         ::std::thread::yield_now();
@@ -38,7 +39,9 @@ pub unsafe fn decode_thread(movie_state: Arc<&mut MovieState>, keep_running: Arc
             break;
         }
     };
-    ffi::av_frame_free(frame as *mut _ as *mut _);
+
+    let _ = decode_packet(std::ptr::null_mut(), &movie_state.video_ctx, frame);
+    ffi::av_frame_free(&mut (frame as *mut _) as *mut *mut _);
 }
 
 fn decode_packet(

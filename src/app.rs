@@ -5,6 +5,7 @@ use std::ptr::NonNull;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::Mutex;
+use ::std::thread::JoinHandle;
 use log::debug;
 use log::info;
 use rusty_ffmpeg::ffi;
@@ -15,6 +16,9 @@ use crate::decode_thread::decode_thread;
 use crate::movie_state::movie_state_enqueue_packet;
 use crate::movie_state::CodecContextWrapper;
 use crate::movie_state::MovieState;
+
+static mut DECODE_THREADS: Vec<Box<JoinHandle<()>>> = vec![];
+static mut PACKET_THREADS: Vec<Box<JoinHandle<()>>> = vec![];
 
 // #[cfg_attr(target_os="linux", path="platform/sdl.rs")]
 // mod platform;
@@ -27,6 +31,14 @@ pub unsafe extern "C" fn new_movie_state() -> *mut MovieState {
 pub unsafe extern "C" fn drop_movie_state(movie_state: *mut MovieState) {
     drop(Box::<MovieState>::from_raw(movie_state));
 }
+
+pub unsafe extern "C" fn drop_analyzer_state(analyzer_ctx: *mut AnalyzerContext) {
+    let a = Box::<AnalyzerContext>::from_raw(analyzer_ctx);
+    // AnalyzerContext::close(a.deref().deref());
+    AnalyzerContext::close(*a);
+    // drop(a);
+}
+
 
 #[no_mangle]
 pub unsafe extern "C" fn a_function_from_rust() -> i32 {
@@ -150,30 +162,96 @@ struct Storage<'m> {
 }
 unsafe impl Send for Storage<'_>{}
 
+/// play all movies attached to the analyzer
+/// this is unsafe because it mutates a single static vec without a mutex
+/// this should only be called from the calling app's main UI thread
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
-pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sender<String> {
-
-    let analyzer_ctx = analyzer_ctx.as_mut().unwrap();
-    let movie_state = analyzer_ctx.movie_list.get_mut(0).unwrap();
+pub unsafe extern "C" fn start_analyzer(analyzer_ptr: *mut AnalyzerContext) -> Sender<String> {
+    let analyzer_ctx = analyzer_ptr.as_mut().unwrap();
 
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let movie_state_arc    = std::sync::Arc::new(movie_state);
+
+    for movie_state in analyzer_ctx.movie_list.iter_mut() {
+        let movie_state_arc  = std::sync::Arc::new(movie_state);
+        let movie_state1     = std::sync::Arc::clone(&movie_state_arc);
+
+        let keep_running2  = std::sync::Arc::clone(&keep_running);
+        PACKET_THREADS.push(
+            Box::new(std::thread::spawn(move || packet_thread_spawner(
+                std::sync::Arc::clone(&keep_running2),
+                movie_state1.video_stream_idx,
+                movie_state1,
+            )))
+        );
+
+        let keep_running3  = std::sync::Arc::clone(&keep_running);
+        let movie_state2   = std::sync::Arc::clone(&movie_state_arc);
+        DECODE_THREADS.push(
+            Box::new(std::thread::spawn(move || {
+                decode_thread(movie_state2, keep_running3)
+            }))
+        );
+    }
+
+    let decoder_handle = std::thread::spawn(move || {
+        // when all tx refs are dropped, this rx will close
+        for msg in rx {
+            debug!("🦀🦀 received message: {}", msg);
+            if msg == "quit" {
+               break;
+            }
+        }
+        info!("🦀🦀 done");
+        keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
+
+        while DECODE_THREADS.len() > 0 {
+            let cur_thread = DECODE_THREADS.remove(0);
+            let _ = cur_thread.join();
+        }
+        while PACKET_THREADS.len() > 0 {
+            let cur_thread = PACKET_THREADS.remove(0);
+            cur_thread.join().unwrap();
+        }
+    });
+    let analyzer_ctx = analyzer_ptr.as_mut().unwrap();
+    analyzer_ctx.set_thread_handle(decoder_handle);
+    tx
+}
+
+
+/// play a single movie statej
+/// this is unsafe because it mutates a single static vec without a mutex
+/// this should only be called from the calling app's main UI thread
+#[no_mangle]
+#[allow(improper_ctypes_definitions)]
+pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) -> Sender<String> {
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let movie_state_arc    = std::sync::Arc::new(movie_state.as_mut().unwrap());
     let movie_state1   = std::sync::Arc::clone(&movie_state_arc);
 
     let keep_running2  = std::sync::Arc::clone(&keep_running);
-    let packet_thread = std::thread::spawn(move || packet_thread_spawner(
-        std::sync::Arc::clone(&keep_running2),
-        movie_state1.video_stream_idx,
-        movie_state1,
-    ));
+
+    PACKET_THREADS.push(
+        Box::new(std::thread::spawn(move || packet_thread_spawner(
+            std::sync::Arc::clone(&keep_running2),
+            movie_state1.video_stream_idx,
+            movie_state1,
+        )))
+    );
+
 
     let keep_running3  = std::sync::Arc::clone(&keep_running);
     let movie_state2   = std::sync::Arc::clone(&movie_state_arc);
-    let decode_thread  = std::thread::spawn(move || {
-        decode_thread(movie_state2, keep_running3)
-    });
+    DECODE_THREADS.push(
+        Box::new(std::thread::spawn(move || {
+            decode_thread(movie_state2, keep_running3)
+        }))
+    );
+
 
     std::thread::spawn(move || {
         // when all tx refs are dropped, this rx will close
@@ -185,13 +263,21 @@ pub unsafe extern "C" fn play_movie(analyzer_ctx: *mut AnalyzerContext) -> Sende
         }
         info!("🦀🦀 done");
         keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
-        decode_thread.join().unwrap();
-        packet_thread.join().unwrap();
+
+        for (index, _) in DECODE_THREADS.iter().enumerate() {
+            let cur_thread = DECODE_THREADS.remove(index);
+            let _ = cur_thread.join();
+        }
+        for (index, _) in PACKET_THREADS.iter().enumerate() {
+            let cur_thread = PACKET_THREADS.remove(index);
+            cur_thread.join().unwrap();
+        }
     });
     tx
 }
 
 
+#[allow(dead_code)]
 unsafe fn get_orientation_metadata_value(format_ctx: *mut ffi::AVFormatContext) -> i32 {
     let key_name = CString::new("rotate").unwrap();
 	let tag: *mut ffi::AVDictionaryEntry = ffi::av_dict_get(
@@ -239,7 +325,6 @@ fn packet_thread_spawner(
     video_stream_idx: i64,
     movie_state: Arc<&mut MovieState>
 ) {
-    let do_loop = true;
     loop {
         if !keep_running.load(std::sync::atomic::Ordering::Relaxed) {
             break;
@@ -248,15 +333,10 @@ fn packet_thread_spawner(
             let packet = ffi::av_packet_alloc().as_mut()
                 .expect("failed to allocated memory for AVPacket");
             let response = ffi::av_read_frame(movie_state.format_context.lock().unwrap().ptr, packet);
-            // if response == ffi::AVERROR(ffi::EAGAIN) || response == ffi::AVERROR_EOF {
             if response == ffi::AVERROR_EOF {
                 println!("{}", String::from(
                     "EOF",
                 ));
-                if !do_loop {
-                    keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
-                    return;
-                }
                 let seek_ret = ffi::av_seek_frame(movie_state.format_context.lock().unwrap().ptr, movie_state.video_stream_idx as i32, 0, ffi::AVSEEK_FLAG_BACKWARD as i32);
                 if seek_ret < 0 {
                     eprintln!("📽📽  failed to seek backwards: ");
@@ -273,7 +353,7 @@ fn packet_thread_spawner(
                 println!("{}", String::from(
                     "ERROR",
                 ));
-                // *keep_running2.get_mut() = false;
+                ffi::av_packet_unref(packet);
                 keep_running.store(false, std::sync::atomic::Ordering::Relaxed);
                 return;
                 // break 'running;
@@ -314,9 +394,32 @@ mod tests {
         }
 
         assert_eq!(analyzer_ctx.movie_count(), 2);
-        analyzer_ctx.close();
+        AnalyzerContext::close(analyzer_ctx);
         sleep(Duration::from_millis(200));
 
-        assert_eq!(analyzer_ctx.movie_count(), 0)
+        // assert_eq!(analyzer_ctx.movie_count(), 0)
     }
+
+    #[test]
+    fn test_pause_analyzer_pauses_all_movies() {
+        let default_file = String::from("test_vid.mp4");
+        let mut analyzer_ctx = AnalyzerContext::new();
+        let filepath: std::ffi::CString = std::ffi::CString::new(default_file).unwrap();
+        unsafe {
+            open_movie(&mut analyzer_ctx, filepath.as_ptr());
+            open_movie(&mut analyzer_ctx, filepath.as_ptr());
+        }
+
+        assert_eq!(analyzer_ctx.movie_count(), 2);
+        analyzer_ctx.step();
+        for movie in analyzer_ctx.movie_list.iter() {
+            assert_eq!(movie.step, true)
+        }
+        AnalyzerContext::close(analyzer_ctx);
+        // analyzer_ctx.close();
+        sleep(Duration::from_millis(200));
+
+        // assert_eq!(analyzer_ctx.movie_count(), 0)
+    }
+
 }

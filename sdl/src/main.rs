@@ -9,6 +9,7 @@ use std::{
 };
 
 use log::{debug, info};
+use ::rsplayer::app::start_analyzer;
 use rusty_ffmpeg::ffi::{self, av_frame_unref};
 
 use sdl2::{
@@ -55,8 +56,8 @@ pub unsafe fn init_subsystem<'sdl>(
         .window("rs-player-ffmpeg-sdl2", default_width, default_height)
         .resizable()
         .position_centered()
-        .set_window_flags(window_flags)
-        .borderless()
+        // .set_window_flags(window_flags)
+        // .borderless()
         .build()
         .unwrap();
 
@@ -98,9 +99,14 @@ fn main() {
 
         let filepath: std::ffi::CString =
             std::ffi::CString::new(args.get(1).unwrap_or(&default_file).as_str()).unwrap();
-        open_movie(&mut analyzer_ctx, filepath.as_ptr()); //, &mut video_state);
-        let tx = play_movie(&mut analyzer_ctx);
-        event_loop(&mut analyzer_ctx, &mut subsystem, tx)
+        open_movie(&mut analyzer_ctx, filepath.as_ptr());
+        open_movie(&mut analyzer_ctx, filepath.as_ptr());
+        // let tx = play_movie(&mut analyzer_ctx);
+        let tx = start_analyzer(&mut analyzer_ctx);
+        event_loop(&mut analyzer_ctx, &mut subsystem, tx);
+        AnalyzerContext::close(analyzer_ctx);
+        // analyzer_ctx.close();
+        // drop(analyzer_ctx);
     }
 }
 pub unsafe fn event_loop(
@@ -132,6 +138,16 @@ pub unsafe fn event_loop(
             texth,
         )
         .unwrap();
+
+    let mut movie_texture2: Texture = texture_creator
+        .create_texture(
+            Some(PixelFormatEnum::IYUV),
+            TextureAccess::Target,
+            textw,
+            texth,
+        )
+        .unwrap();
+
 
     let mut draw_texture: Texture = texture_creator
         .create_texture(
@@ -232,6 +248,7 @@ pub unsafe fn event_loop(
                                 analyzer_ctx.pause();
                             }
                             Some(Keycode::Period) => {
+                                info!("analyzer step");
                                 tx.send("step".to_string()).unwrap();
                                 analyzer_ctx.step();
                             }
@@ -264,30 +281,78 @@ pub unsafe fn event_loop(
         //     continue;
         // }
 
-
-        if let Some(dest_frame) = analyzer_ctx.dequeue_frame() {
-            // let dest_frame = dest_frame.ptr;
-
-            frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture).unwrap_or_default();
-
-            // texture_to_texture(
-            //     &mut movie_texture,
-            //     &mut subsystem.canvas,
-            //     &mut texture,
-            // ).unwrap_or_default();
-            ffi::av_frame_unref(dest_frame as *mut _);
+        if analyzer_ctx.is_paused() == false || analyzer_ctx.force_render == false {
+        let mut frame_remaining = 1./60.;
+        let mut nearest_frame = -1.;
+        for index in 0..analyzer_ctx.movie_count() {
+            if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
+                if nearest_frame < remaining {
+                    nearest_frame = remaining;
+                }
+                if index == 0 {
+            // info!("got pts for movie index {}", index);
+                    frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture).unwrap_or_default();
+                } else {
+            // info!("got pts for movie index {}", index);
+                    frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture2).unwrap_or_default();
+                }
+                // let m: Option<&mut MovieState> = analyzer_ctx.movie_list.get_mut(index as usize) as Option<&mut MovieState>;
+                // m.unwrap().update_last_time(unsafe {ffi::av_gettime_relative()});
+                // texture_to_texture(
+                //     &mut movie_texture,
+                //     &mut subsystem.canvas,
+                //     &mut texture,
+                // ).unwrap_or_default();
+                ffi::av_frame_unref(dest_frame as *mut _);
+                ffi::av_frame_free(&mut dest_frame as *mut *mut _);
+            };
         };
 
-        composite(&mut subsystem.canvas, &mut texture, &mut movie_texture);
-        composite(&mut subsystem.canvas, &mut texture, &mut ui_texture);
+        if nearest_frame < 0. {
+            ::std::thread::sleep(std::time::Duration::from_secs_f64(frame_remaining));
+        } else {
+            ::std::thread::sleep(std::time::Duration::from_secs_f64((nearest_frame - 0.0001).max(0.)));
+        }
+        }
+ 
+        // analyzer_ctx.movie_list.iter_mut().enumerate().for_each(|(index, movie)| {
+        //     if let Some(dest_frame) = movie.dequeue_frame_raw() {
+        //         if index == 0 {
+        //             frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture).unwrap_or_default();
+        //         } else {
+        //             frame_to_texture(dest_frame.as_mut().unwrap(), &mut movie_texture2).unwrap_or_default();
+        //         }
+        //         // texture_to_texture(
+        //         //     &mut movie_texture,
+        //         //     &mut subsystem.canvas,
+        //         //     &mut texture,
+        //         // ).unwrap_or_default();
+        //         ffi::av_frame_unref(dest_frame as *mut _);
+        //     };
+        // });
+
+        composite(&mut subsystem.canvas, &mut texture, &mut movie_texture, Some(sdl2::sys::SDL_Rect{
+            x: 0,
+            y: 720/4,
+            w: 1280/2,
+            h: 720/2,
+        }));
+        composite(&mut subsystem.canvas, &mut texture, &mut movie_texture2, Some(sdl2::sys::SDL_Rect{
+            x: 1280/2,
+            y: 720/4,
+            w: 1280/2,
+            h: 720/2,
+        }));
+        composite(&mut subsystem.canvas, &mut texture, &mut ui_texture, None);
         blit_texture(&mut subsystem.canvas, &mut texture).unwrap_or_default();
         // blit_texture(&mut subsystem.canvas, &mut ui_texture).unwrap_or_default();
 
         // last_clock = ffi::av_gettime_relative();
         subsystem.canvas.present();
+        analyzer_ctx.force_render = false;
 
         screen_cap(subsystem, &mut record_tx, i);
-        std::thread::yield_now();
+        // std::thread::yield_now();
     }
     drop(tx);
     drop(record_tx);
@@ -586,7 +651,7 @@ unsafe fn draw_ui(renderer: &mut Canvas<Window>, tex2: &mut Texture, is_recordin
     sdl2::sys::SDL_SetRenderTarget(renderer.raw(), std::ptr::null_mut());
 }
 
-unsafe fn composite(renderer: &mut Canvas<Window>, tex: &mut Texture, tex2: &mut Texture) {
+unsafe fn composite(renderer: &mut Canvas<Window>, tex: &mut Texture, tex2: &mut Texture, dest_rec: Option<sdl2::sys::SDL_Rect>) {
     sdl2::sys::SDL_SetRenderTarget(renderer.raw(), tex.raw());
     let dest_rect = sdl2::sys::SDL_Rect {
         x: 30,
@@ -602,7 +667,11 @@ unsafe fn composite(renderer: &mut Canvas<Window>, tex: &mut Texture, tex2: &mut
     // sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), 25 as u8);
     // sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), 70 as u8);
     // sdl2::sys::SDL_RenderCopy(renderer.raw(), tex2.raw(), std::ptr::null(), &dest_rect);
-    sdl2::sys::SDL_RenderCopy(renderer.raw(), tex2.raw(), std::ptr::null(), std::ptr::null());
+    if let Some(destination) = dest_rec {
+        sdl2::sys::SDL_RenderCopy(renderer.raw(), tex2.raw(), std::ptr::null(), &destination);
+    } else {
+        sdl2::sys::SDL_RenderCopy(renderer.raw(), tex2.raw(), std::ptr::null(), std::ptr::null());
+    }
 
     sdl2::sys::SDL_SetRenderTarget(renderer.raw(), std::ptr::null_mut());
 
