@@ -34,9 +34,9 @@ pub unsafe fn decode_thread(movie_state: Arc<&mut MovieState>, keep_running: Arc
             ffi::av_packet_unref(packet.ptr);
             ffi::av_packet_free(&mut packet.ptr as *mut *mut _);
             locked_videoqueue.pop_front();
+        } else {
+            ::std::thread::sleep(::std::time::Duration::from_micros(10));
         }
-        ::std::thread::yield_now();
-        ::std::thread::sleep(::std::time::Duration::from_micros(10));
         if ! keep_running.load(std::sync::atomic::Ordering::Relaxed) {
             break;
         }
