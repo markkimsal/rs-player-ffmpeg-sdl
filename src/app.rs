@@ -182,28 +182,32 @@ pub unsafe extern "C" fn start_analyzer(analyzer_ptr: *mut AnalyzerContext) -> S
 
     for movie_state in analyzer_ctx.movie_list.iter_mut() {
         let movie_state_arc = std::sync::Arc::new(movie_state);
-        let movie_state1    = std::sync::Arc::clone(&movie_state_arc);
-        let do_loop         = std::sync::Arc::clone(&do_loop);
 
-        let keep_running2  = std::sync::Arc::clone(&keep_running);
         PACKET_THREADS.push(
             Box::new(std::thread::Builder::new()
             .name("packet thread".to_owned())
-            .spawn(move || packet_thread_spawner(
-                std::sync::Arc::clone(&keep_running2),
-                do_loop,
-                movie_state1.video_stream_idx,
-                movie_state1,
-            )).unwrap())
+            .spawn({
+                let do_loop      = std::sync::Arc::clone(&do_loop);
+                let keep_running = std::sync::Arc::clone(&keep_running);
+                let movie_state  = std::sync::Arc::clone(&movie_state_arc);
+                move || packet_thread_spawner(
+                    keep_running,
+                    do_loop,
+                    movie_state.video_stream_idx,
+                    movie_state,
+                )
+            }).unwrap())
         );
 
-        let keep_running3  = std::sync::Arc::clone(&keep_running);
-        let movie_state2   = std::sync::Arc::clone(&movie_state_arc);
         DECODE_THREADS.push(
             Box::new(std::thread::Builder::new()
             .name("decode thread".to_owned())
-            .spawn(move || {
-                decode_thread(movie_state2, keep_running3)
+            .spawn({
+                let keep_running = std::sync::Arc::clone(&keep_running);
+                let movie_state  = std::sync::Arc::clone(&movie_state_arc);
+                move || {
+                    decode_thread(movie_state, keep_running)
+                }
             }).unwrap())
         );
     }
