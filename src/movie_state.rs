@@ -1,4 +1,5 @@
 #![allow(unused_variables, dead_code, unused)]
+use ::std::{io::Empty, sync::Condvar};
 use std::{ops::Deref, sync::Mutex, collections::VecDeque};
 
 use log::{error, info};
@@ -29,6 +30,7 @@ pub struct MovieState {
     pub last_pts_time: f64,
     pub last_display_time: f64,
     pub step: bool,
+    packet_q_cond: std::sync::Arc<(Mutex<bool>, std::sync::Condvar)>
 }
 impl Drop for MovieState {
     fn drop(&mut self) {
@@ -36,8 +38,10 @@ impl Drop for MovieState {
         {
             info!("free video codec context");
             let mut video_ctx = self.video_ctx.lock().unwrap();
+            // unsafe {ffi::avcodec_close(video_ctx.ptr.as_ref().unwrap().codec as *mut _);}
+            unsafe {ffi::avcodec_close(video_ctx.ptr);}
             unsafe {ffi::avcodec_free_context(&mut video_ctx.ptr as *mut *mut _);}
-            unsafe {ffi::av_free(video_ctx.ptr as *mut _);}
+            // unsafe {ffi::av_free(video_ctx.ptr as *mut _);}
             drop(video_ctx);
         }
         {
@@ -84,7 +88,12 @@ impl MovieState {
             last_pts_time: 0.,
             last_display_time: 0.,
             step: false,
+            packet_q_cond: std::sync::Arc::new((Mutex::new(false), Condvar::new()))
         }
+    }
+
+    pub fn set_queue_cond(&mut self, cond: ::std::sync::Arc<(::std::sync::Mutex<bool>, ::std::sync::Condvar)>) {
+        self.packet_q_cond = cond;
     }
 }
 unsafe impl Send for MovieState{}
@@ -92,6 +101,23 @@ impl MovieState {
     pub fn set_format_context(&mut self, format_context: *mut ffi::AVFormatContext) {
         self.format_context = Mutex::new(FormatContextWrapper{ptr:format_context});
     }
+
+    pub fn dequeue_packet(&self) -> Result<PacketWrapper, ()> {
+        let mut vq = self.videoqueue.lock().unwrap();
+        if vq.len() <= 0 {
+            // info!("don't break the lock");
+            let mut empty = self.packet_q_cond.0.lock().unwrap();
+            *empty = true;
+            self.packet_q_cond.1.notify_one();
+        }
+
+        if vq.len() == 0 {
+            return Err(());
+        }
+        let pkt = vq.pop_front().unwrap();
+        return Ok(pkt);
+    }
+
     pub fn enqueue_packet(&self, packet: *mut ffi::AVPacket) -> Result<(), ()> {
         let mut vq = self.videoqueue.lock().unwrap();
         if vq.len() >= PACKET_QUEUE_SIZE {

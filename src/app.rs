@@ -1,3 +1,4 @@
+#![allow(static_mut_refs)]
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::ptr;
@@ -393,7 +394,6 @@ fn packet_thread_spawner(
                             break;
                         }
                     }
-                    // ::std::thread::sleep(Duration::from_millis(33));
                 } else {
                     ffi::av_packet_unref(packet);
                 }

@@ -286,8 +286,10 @@ pub unsafe fn event_loop(
         if analyzer_ctx.is_paused() == false || analyzer_ctx.force_render == false {
         let mut frame_remaining = 1./60.;
         let mut nearest_frame = -1.;
+
+        let mut current_clock = unsafe {ffi::av_gettime_relative()};
         for index in 0..analyzer_ctx.movie_count() {
-            if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
+            if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _, current_clock) {
                 if nearest_frame < remaining {
                     nearest_frame = remaining;
                 }
@@ -300,17 +302,23 @@ pub unsafe fn event_loop(
                 ffi::av_frame_free(&mut dest_frame as *mut *mut _);
             };
         };
+        analyzer_ctx.update_clock(current_clock);
 
         if nearest_frame < 0. {
+            // info!("full frame sleep");
             ::std::thread::sleep(std::time::Duration::from_secs_f64(frame_remaining));
-            ::std::thread::yield_now();
+            // ::std::thread::yield_now();
             continue;
         }
         if nearest_frame > 0. {
+            // info!("delta frame sleep {}", nearest_frame);
             ::std::thread::sleep(std::time::Duration::from_secs_f64((nearest_frame - 0.0001).max(0.)));
         }
-        }
  
+        let mut current_clock = unsafe {ffi::av_gettime_relative()};
+        analyzer_ctx.update_clock(current_clock);
+        }
+
         // analyzer_ctx.movie_list.iter_mut().enumerate().for_each(|(index, movie)| {
         //     if let Some(dest_frame) = movie.dequeue_frame_raw() {
         //         if index == 0 {
