@@ -70,8 +70,9 @@ unsafe fn play_movies(analyzer_ctx: &mut AnalyzerContext) {
     // let refresh_rate = 1./60.;
     let mut nearest_frame = -0.;
     'all_frames: loop {
+        let mut current_clock: i64 = unsafe { ffi::av_gettime_relative() };
     for index in 0..analyzer_ctx.movie_count() {
-        if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
+        if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _, current_clock) {
             if nearest_frame < remaining {
                 nearest_frame = remaining;
             }
