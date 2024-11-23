@@ -4,7 +4,7 @@ use ::std::{ops::Deref, slice::Iter, thread::JoinHandle};
 use log::debug;
 use ::log::info;
 use rusty_ffmpeg::ffi;
-use ::rusty_ffmpeg::ffi::{AVDurationEstimationMethod_AVFMT_DURATION_FROM_BITRATE, AV_NOPTS_VALUE};
+use ::rusty_ffmpeg::ffi::{AVDurationEstimationMethod_AVFMT_DURATION_FROM_BITRATE, AVPixelFormat_AV_PIX_FMT_RGBA, AV_NOPTS_VALUE};
 
 use crate::movie_state::{self, FrameWrapper, MovieState};
 
@@ -50,12 +50,12 @@ impl AnalyzerContext {
         self.movie_list.len() as u8
     }
 
-    pub fn dequeue_frame(&mut self, movie_index: u8, current_clock: i64) -> (f64, Option<*mut ffi::AVFrame>) {
+    pub fn dequeue_frame(&mut self, movie_index: u8) -> (f64, Option<*mut ffi::AVFrame>) {
         if self.movie_list.len() == 0 {
             return (0., None);
         }
         let mut frame_delay = 0.;
-        if let (delay, Some(pts)) = self.peek_movie_state_packet(movie_index as _, current_clock) {
+        if let (delay, Some(pts)) = self.peek_movie_state_packet(movie_index as _) {
             if pts != 0 && self.is_paused() {
                 return (0., None);
             }
@@ -72,6 +72,7 @@ impl AnalyzerContext {
             .as_mut()
             .expect("failed to allocated memory for AVFrame")
         };
+        // dest_frame.format = AVPixelFormat_AV_PIX_FMT_RGBA;
 
         let movie_state: &MovieState = self.movie_list.get(movie_index as usize).unwrap();
         unsafe {
@@ -96,6 +97,7 @@ impl AnalyzerContext {
                         frame.ptr.as_ref().unwrap().width,
                         frame.ptr.as_ref().unwrap().height,
                     ),
+                    // AVPixelFormat_AV_PIX_FMT_RGBA,
                     frame.ptr.as_ref().unwrap().format,
                 );
             }
@@ -110,7 +112,13 @@ impl AnalyzerContext {
 
     }
 
-    fn peek_movie_state_packet(&mut self, movie_index: usize, current_clock: i64) -> (f64, Option<i64>) {
+    fn peek_movie_state_packet(&mut self, movie_index: usize) -> (f64, Option<i64>) {
+        let current_clock = self.clock.current_clock;
+        let display_delta = match (self.clock.last_updated) {
+            0 => 0,
+            default => self.clock.current_clock - self.clock.last_updated,
+        };
+
         let movie_state = self.movie_list.get_mut(movie_index).unwrap();
         // for (index, movie_state) in self.movie_list.iter_mut().enumerate() {
             if movie_state.step {
@@ -124,13 +132,15 @@ impl AnalyzerContext {
             if let Some(pts) = movie_state.peek_frame_pts() {
                 let frame_rate = movie_state.video_frame_rate;
 
+                let time_base = unsafe {(*(movie_state.video_stream.lock().unwrap()).ptr).time_base};
+                let pts_time = pts as f64  * time_base.num as f64 / time_base.den as f64;
                 let mut delay: f64 = 0.;
                 unsafe {
-                let mut last_clock = self.clock.last_updated;
-                if self.clock.pts == ffi::AV_NOPTS_VALUE {
-                    last_clock = 0;
-                }
-                let delta = current_clock - last_clock;
+                // let mut last_clock = self.clock.last_updated;
+                // if self.clock.pts == ffi::AV_NOPTS_VALUE {
+                //     last_clock = 0;
+                // }
+                // let delta = current_clock - last_clock;
 
 
                 // we looped, this pts is less than last displayed pts
@@ -141,29 +151,31 @@ impl AnalyzerContext {
                 }
 
                 if movie_state.last_pts != ffi::AV_NOPTS_VALUE {
-                    let time_base = (*(movie_state.video_stream.lock().unwrap()).ptr).time_base;
-                    let pts_time = pts as f64  * time_base.num as f64 / time_base.den as f64;
                     // let movie_delta_time = ((current_clock as f64) / 1_000_000.) - ((self.clock.last_updated as f64) / 1_000_000.);
-                    let movie_delta_time = ((current_clock  - self.clock.last_updated) as f64) / 1_000_000.;
+                    // let movie_delta_time = ((current_clock  - self.clock.last_updated) as f64) / 1_000_000.;
+                    let movie_delta_time = display_delta as f64 / 1_000_000.;
+                    // info!("{}", movie_delta_time);
                     if pts_time - movie_state.last_pts_time >  movie_delta_time {
                         delay = pts_time - movie_state.last_pts_time - movie_delta_time; // - 0.0079;
                         // delay = (current_clock as f64 / 1_000_000.) - pts_time; // -  - 0.002;
-                        // info!("{}, {}, {}", movie_delta_time, pts_time - movie_state.last_pts_time, delay);
+                        info!("{}, {}, {}", movie_delta_time, pts_time - movie_state.last_pts_time, delay);
                     }
                     // info!("movie_delta_time {} pts_time {}", movie_delta_time, pts_time);
 
-                    movie_state.last_pts_time = pts_time;
                 }
                 }
-                if delay > 0.01 {
+                let max_jitter:f64 = (0.001 as f64).min(display_delta as f64 / 1_000_000.);
+                // info!("{} {}", 0.01666 - max_jitter, delay);
+                if delay > 0.030667 {
+                        info!("{}, {}, ", movie_index, delay);
                     // TODO: check other movie_states to see if any other frame is ready for display
                     // ::std::thread::sleep(std::time::Duration::from_secs_f64((delay - 0.0001).max(0.)));
                     return (0., None);
                     // continue;
                 }
-                let time_base = unsafe {(*(movie_state.video_stream.lock().unwrap()).ptr).time_base};
-                let pts_time = pts as f64  * time_base.num as f64 / time_base.den as f64;
-                let last_pts_time = movie_state.last_pts as f64  * time_base.num as f64 / time_base.den as f64;
+                // let time_base = unsafe {(*(movie_state.video_stream.lock().unwrap()).ptr).time_base};
+                // let pts_time = pts as f64  * time_base.num as f64 / time_base.den as f64;
+                // let last_pts_time = movie_state.last_pts as f64  * time_base.num as f64 / time_base.den as f64;
 
                 // TODO: i don't think this is correct.
                 // if the last time I displayed a frame was 
@@ -181,17 +193,17 @@ impl AnalyzerContext {
                 //     && movie_state.last_pts != ffi::AV_NOPTS_VALUE {
                 // if delay < 0.000149
                 if delay < 0.00
-                    && delay != 0.
                     && ! self.paused.load(::std::sync::atomic::Ordering::Relaxed)
                     {
-            
-
                     // frame drop
                     info!("frame drop {}", delay);
                     // TODO: don't update the last clock somehow.  otherwise the movies can
                     // TODO: get out of sync with eacher but remain relatively correct with the deltas
-                    // movie_state.last_pts      = pts; //ffi::AV_NOPTS_VALUE;
+                    movie_state.last_pts      = ffi::AV_NOPTS_VALUE;
                     // movie_state.last_pts_time = pts_time;
+                    // movie_state.last_pts      = pts;
+                    // movie_state.last_display_time = current_clock as f64 / 1_000_000.;
+
                     let mut f = movie_state.dequeue_frame().unwrap();
                     unsafe { ffi::av_frame_free(&mut f.ptr as *mut _ as *mut _) };
                     return (0., None);
@@ -204,6 +216,7 @@ impl AnalyzerContext {
 
                 movie_state.last_pts      = pts;
                 movie_state.last_display_time = current_clock as f64 / 1_000_000.;
+                movie_state.last_pts_time = pts_time;
                 // next frame's delay is based on only the latest pts
                 if self.clock.pts < movie_state.last_pts {
                    self.clock.pts = movie_state.last_pts;
@@ -273,6 +286,11 @@ impl AnalyzerContext {
     pub fn update_clock(&mut self, t: i64) {
         self.clock.last_updated = t;
     }
+
+    pub fn update_current(&mut self, t: i64) {
+        self.clock.current_clock = t;
+    }
+
 }
 
 

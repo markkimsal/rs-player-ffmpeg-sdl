@@ -99,11 +99,12 @@ fn main() {
 
         let filepath: std::ffi::CString =
             std::ffi::CString::new(args.get(1).unwrap_or(&default_file).as_str()).unwrap();
+        let filepath_2 = std::ffi::CString::new("test_vid_r30.mp4").unwrap();
         open_movie(&mut analyzer_ctx, filepath.as_ptr());
-        open_movie(&mut analyzer_ctx, filepath.as_ptr());
+        open_movie(&mut analyzer_ctx, filepath_2.as_ptr());
         // let tx = play_movie(&mut analyzer_ctx);
 
-        analyzer_ctx.set_loop(false);
+        analyzer_ctx.set_loop(true);
         let tx = start_analyzer(&mut analyzer_ctx);
         event_loop(&mut analyzer_ctx, &mut subsystem, tx);
         AnalyzerContext::close(analyzer_ctx);
@@ -288,8 +289,9 @@ pub unsafe fn event_loop(
         let mut nearest_frame = -1.;
 
         let mut current_clock = unsafe {ffi::av_gettime_relative()};
+        analyzer_ctx.update_current(current_clock);
         for index in 0..analyzer_ctx.movie_count() {
-            if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _, current_clock) {
+            if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
                 if nearest_frame < remaining {
                     nearest_frame = remaining;
                 }
@@ -302,7 +304,7 @@ pub unsafe fn event_loop(
                 ffi::av_frame_free(&mut dest_frame as *mut *mut _);
             };
         };
-        analyzer_ctx.update_clock(current_clock);
+        // analyzer_ctx.update_clock(current_clock);
 
         if nearest_frame < 0. {
             // info!("full frame sleep");
@@ -581,7 +583,7 @@ unsafe fn screen_cap(
     dest_frame.width = screen_size.0 as _;
     dest_frame.height = screen_size.1 as _;
     dest_frame.format = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
-    dest_frame.time_base = ffi::AVRational { num: 1, den: 25 };
+    dest_frame.time_base = ffi::AVRational { num: 1, den: 60 };
     let ret = ffi::av_frame_get_buffer(dest_frame, 0);
 
     dest_frame.pts = i;

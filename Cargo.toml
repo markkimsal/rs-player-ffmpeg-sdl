@@ -9,7 +9,7 @@ path = "src/lib.rs"
 crate-type   = ["rlib", "cdylib"]
 
 [workspace]
-members = ["sdl"]
+members = ["sdl", "imgui-sdl"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -17,6 +17,6 @@ libc = "^0.2.144"
 libloading = "^0.8"
 rusty_ffmpeg = { version = "^0.13.1+ffmpeg.6.0", features = ["ffmpeg5"] }
 clap = { version = "4.0", features = ["derive"] }
-sdl2 = "^0.35.2"
+sdl2 = "^0.37.0"
 colog = "^1.3.0"
 log = "0.4.22"

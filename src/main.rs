@@ -1,7 +1,7 @@
 #![allow(unused_mut)]
 use std::time::Duration;
 
-use ::log::logger;
+#[allow(unused_imports)]
 use log::{debug, info};
 use ::rsplayer::app::start_analyzer;
 #[allow(unused_imports)]
@@ -71,8 +71,9 @@ unsafe fn play_movies(analyzer_ctx: &mut AnalyzerContext) {
     let mut nearest_frame = -0.;
     'all_frames: loop {
         let mut current_clock: i64 = unsafe { ffi::av_gettime_relative() };
+        analyzer_ctx.update_current(current_clock);
     for index in 0..analyzer_ctx.movie_count() {
-        if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _, current_clock) {
+        if let (remaining, Some(mut dest_frame)) = analyzer_ctx.dequeue_frame(index as _) {
             if nearest_frame < remaining {
                 nearest_frame = remaining;
             }

@@ -12,8 +12,8 @@ pub unsafe fn decode_thread(movie_state: Arc<&mut MovieState>, keep_running: Arc
         .as_mut()
         .expect("failed to allocated memory for AVFrame");
     loop {
-        let mut locked_videoqueue = movie_state.videoqueue.lock().unwrap();
-        if let Some(packet) = locked_videoqueue.front_mut() {
+        // let mut locked_videoqueue = movie_state.videoqueue.lock().unwrap();
+        if let Ok(mut packet) = movie_state.dequeue_packet() {
             // !Note that AVPacket.pts is in AVStream.time_base units, not AVCodecContext.time_base units.
             if let Ok(_) = decode_packet(packet.ptr, &movie_state.video_ctx, frame) {
                 {
@@ -24,7 +24,7 @@ pub unsafe fn decode_thread(movie_state: Arc<&mut MovieState>, keep_running: Arc
                 // this returns an error when the queue is full.
                 while let Err(_) = movie_state_enqueue_frame(&movie_state.picq, frame) {
                     // ::std::thread::yield_now();
-                    ::std::thread::sleep(::std::time::Duration::from_millis(70));
+                    ::std::thread::sleep(::std::time::Duration::from_millis(60));
                     if ! keep_running.load(std::sync::atomic::Ordering::Relaxed) {
                         break;
                     }
@@ -33,9 +33,9 @@ pub unsafe fn decode_thread(movie_state: Arc<&mut MovieState>, keep_running: Arc
             ffi::av_frame_unref(frame as *mut _);
             ffi::av_packet_unref(packet.ptr);
             ffi::av_packet_free(&mut packet.ptr as *mut *mut _);
-            locked_videoqueue.pop_front();
+            // locked_videoqueue.pop_front();
         } else {
-            ::std::thread::sleep(::std::time::Duration::from_micros(10));
+        //    ::std::thread::sleep(::std::time::Duration::from_micros(10));
         }
         if ! keep_running.load(std::sync::atomic::Ordering::Relaxed) {
             break;

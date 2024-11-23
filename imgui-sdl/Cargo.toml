@@ -1,0 +1,21 @@
+[package]
+name = "imgui-sdl"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+imgui = { version = "0.12.0", git = "https://github.com/imgui-rs/imgui-rs" }
+imgui-sdl2-support = {version = "0.13.0", git = "https://github.com/imgui-rs/imgui-sdl2-support" }
+sdl2 = "^0.37.0"
+imgui-glow-renderer = { version = "0.13.0", git = "https://github.com/imgui-rs/imgui-glow-renderer" }
+clap = { version = "4.0", features = ["derive"] }
+colog = "^1.3.0"
+log = "0.4.22"
+rs-player-ffmpeg-sdl = { path = "../" }
+rusty_ffmpeg = { version = "0.13.1", features = ["ffmpeg5"] }
+
+
+[dev-dependencies]
+imgui-glow-renderer = { version = "0.13.0", git = "https://github.com/imgui-rs/imgui-glow-renderer" }

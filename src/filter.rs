@@ -1,6 +1,8 @@
 
 #![allow(unused_variables, non_camel_case_types)]
+use ::core::panic;
 use std::ffi::{CStr, CString};
+use ::std::ptr;
 use rusty_ffmpeg::ffi::{self};
 
 
@@ -51,33 +53,24 @@ pub fn init_filter(
 
     let width = wh.0;
     let height = wh.1;
-    // let width = 450;
-    // let height = 800;
 	// assume source is AV_PIX_FMT_YUV420P;
 	/* buffer video source: the decoded frames from the decoder will be inserted here. */
     let args = format!(
         "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
         width, height,
-        // ffi::AVPixelFormat_AV_PIX_FMT_ARGB,
+        // ffi::AVPixelFormat_AV_PIX_FMT_RGB24,
         format as ffi::AVPixelFormat,
         time_base.num, time_base.den, 1, 1
     );
     let args = &CString::new(args).unwrap();
-    println!(
-        "video_size={}x{}:pix_fmt={}:time_base={}/{}:pixel_aspect={}/{}",
-        width, height,
-        // ffi::AVPixelFormat_AV_PIX_FMT_ARGB,
-        format as ffi::AVPixelFormat,
-        time_base.num, time_base.den, 1, 1
-    );
+    println!("{}", args.to_str().unwrap());
 
     unsafe {
-        let in_buff = CString::new("in").unwrap();
+        let buff_name = CString::new("in").unwrap();
         let ret = ffi::avfilter_graph_create_filter(
             &mut *buffersrc_ctx as *mut _,
             buffer_src,
-            (&in_buff as &CStr).as_ptr(),
-            // std::ptr::null(),
+            (&buff_name as &CStr).as_ptr(),
             args.as_ptr() as *const _,
             std::ptr::null_mut(),
             *filter_graph
@@ -91,22 +84,23 @@ pub fn init_filter(
         // the first filter described by filters_descr; since the first
         // filter input label is not specified, it is set to "in" by
         // default.
-        (*outputs).name       = ffi::av_strdup(in_buff.as_ptr());
-        (*outputs).filter_ctx = *buffersrc_ctx;
-        (*outputs).pad_idx    = 0;
-        (*outputs).next       = std::ptr::null_mut();
+        (*inputs).name       = ffi::av_strdup(buff_name.as_ptr());
+        (*inputs).filter_ctx = *buffersrc_ctx;
+        (*inputs).pad_idx    = 0;
+        (*inputs).next       = std::ptr::null_mut();
 
     }
 
-
     unsafe {
-        let out_buff = CString::new("out").unwrap();
+
+        let buff_name = CString::new("out").unwrap();
         /* buffer video sink: to terminate the filter chain. */
         let ret = ffi::avfilter_graph_create_filter(
             buffersink_ctx as *mut *mut _,
             buffer_sink,
-            out_buff.as_ptr(),
+            buff_name.as_ptr(),
             std::ptr::null(),
+            // args.as_ptr() as *const _,
             std::ptr::null_mut(),
             *filter_graph
         );
@@ -121,38 +115,25 @@ pub fn init_filter(
         // the last filter described by filters_descr; since the last
         // filter output label is not specified, it is set to "out" by
         // default.
-        (*inputs).name       = ffi::av_strdup(out_buff.as_ptr());
-        (*inputs).filter_ctx = *buffersink_ctx;
-        (*inputs).pad_idx    = 0;
-        (*inputs).next       = std::ptr::null_mut();
+        (*outputs).name       = ffi::av_strdup(buff_name.as_ptr());
+        (*outputs).filter_ctx = *buffersink_ctx;
+        (*outputs).pad_idx    = 0;
+        (*outputs).next       = std::ptr::null_mut();
     }
 
-// unsafe {
-//     let key = CString::new("pix_fmts").unwrap();
-//     let result = ffi::av_opt_set_pixel_fmt(*buffersink_ctx as _, key.as_ptr(), ffi::AVPixelFormat_AV_PIX_FMT_YUV420P, AV_OPT_SEARCH_CHILDREN as i32);
-//     println!("result {}", result);
-// }
-// 	ret = av_opt_set_int_list(block->buffersink_ctx, "pix_fmts", pix_fmts,
-// 			AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
-// 	if (ret < 0) {
-// 		avfilter_inout_free(&inputs);
-// 		avfilter_inout_free(&outputs);
-// 		return ret;
-// 	}
-
-    //
     // Set the endpoints for the filter graph. The filter_graph will
     // be linked to the graph described by filters_descr.
     //
     unsafe {
 
-        // let transpose = match rotation {
-        //     90 => "transpose=1",
-        //     270 => "transpose=2",
-        //     -90 => "transpose=3",
-        //     _  => "tpad=0",
-        // };
-        // let filter_desc = CString::new(transpose).unwrap();
+        let transpose = match rotation {
+            90 => "transpose=1",
+            270 => "transpose=2",
+            -90 => "transpose=3",
+            _  => "tpad=0",
+        };
+    //     // let filter_desc = CString::new(transpose).unwrap();
+        // let filter_desc = CString::new("format=pix_fmts=rgba [0:in]").unwrap();
         // let ret = ffi::avfilter_graph_parse_ptr(
         //     *filter_graph,
         //     filter_desc.as_ptr(),
@@ -160,14 +141,14 @@ pub fn init_filter(
         //     &mut outputs as *mut _,
         //     std::ptr::null_mut()
         // );
-        // if ret >= 0 {
-        //     ffi::avfilter_graph_config(*filter_graph as *mut _, std::ptr::null_mut());
-        // }
+    //     if ret >= 0 {
+    //         ffi::avfilter_graph_config(*filter_graph as *mut _, std::ptr::null_mut());
+    //     }
         // ffi::avfilter_graph_parse_ptr(*filter_graph, null(), &mut inputs as *mut _, &mut outputs as *mut _, null_mut());
 
-        ffi::avfilter_graph_config(*filter_graph as *mut _, std::ptr::null_mut());
-		ffi::avfilter_inout_free(&mut inputs  as *mut _);
-		ffi::avfilter_inout_free(&mut outputs  as *mut _);
+        // ffi::avfilter_graph_config(*filter_graph as *mut _, std::ptr::null_mut());
+		// ffi::avfilter_inout_free(&mut inputs  as *mut _);
+		// ffi::avfilter_inout_free(&mut outputs  as *mut _);
     }
     return ret;
 }

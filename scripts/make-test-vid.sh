@@ -1,20 +1,20 @@
 #!/bin/sh
-ofn=test_vid.mp4
+ofn=test_vid_r30.mp4
 docker run --rm -it -v "$(pwd)":/app -w /app \
   mwader/static-ffmpeg:7.0.2 \
   -y \
   -pixel_format yuv420p -g 30 -c:v libx264 -preset fast -b:v 2.1M -minrate 1.1M -maxrate 2.4M -bufsize 80.0M \
   -filter_complex "\
-    smptebars=size=1280x720:rate=60:duration=2 \
+    smptebars=size=1280x720:rate=30:duration=2 \
   [v1]; \
   [v1]
     rotate=0.066*t \
   [v1]; \
-    zoneplate=d=2: ku=512: kv=100: kt2=0: ky2=256: kx2=556: s=1280x720: r=60: yo=0: kt=11  \
+    zoneplate=d=2: ku=512: kv=100: kt2=0: ky2=256: kx2=556: s=1280x720: r=30: yo=0: kt=11  \
     , pad=1280:720: (ow-iw)/2: (oh-ih)/2: violet \
     , setsar=1 \
   [v2]; \
-    life=size=320x180: mold=10: death_color=violet: rate=60
+    life=size=320x180: mold=10: death_color=violet: rate=30
     , scale=1280:720  \
     , trim=duration=2 \
   [v3]; \

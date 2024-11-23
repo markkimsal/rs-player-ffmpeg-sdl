@@ -53,7 +53,7 @@ impl RecordState {
     }
 
     pub unsafe fn start_recording_thread(&mut self) -> (SyncSender<FrameWrapper>, Option<JoinHandle<()>>) {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<FrameWrapper>(3);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<FrameWrapper>(25);
 
         let file_ext: std::ffi::CString = std::ffi::CString::new("mp4").unwrap();
         let file_name: std::ffi::CString = std::ffi::CString::new("output.mp4").unwrap();
@@ -146,7 +146,7 @@ unsafe fn add_stream(
             c.width = width as _;
             c.height = height as _;
 
-            c.gop_size = 10;
+            c.gop_size = 30;
             c.max_b_frames = 1;
             c.pix_fmt = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
             // c.profile = ffi::FF_PROFILE_H264_CONSTRAINED_BASELINE as _;

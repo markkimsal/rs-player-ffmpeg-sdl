@@ -4,6 +4,7 @@ use std::ptr;
 use std::ptr::NonNull;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+use ::std::sync::Condvar;
 use std::sync::Mutex;
 use ::std::thread::JoinHandle;
 use log::debug;
@@ -181,20 +182,25 @@ pub unsafe extern "C" fn start_analyzer(analyzer_ptr: *mut AnalyzerContext) -> S
     let do_loop      = std::sync::Arc::new(analyzer_ctx.get_loop());
 
     for movie_state in analyzer_ctx.movie_list.iter_mut() {
+        let packet_queue_pair = Arc::new((Mutex::new(false), Condvar::new()));
+        movie_state.set_queue_cond(std::sync::Arc::clone(&packet_queue_pair));
+
         let movie_state_arc = std::sync::Arc::new(movie_state);
 
         PACKET_THREADS.push(
             Box::new(std::thread::Builder::new()
             .name("packet thread".to_owned())
             .spawn({
-                let do_loop      = std::sync::Arc::clone(&do_loop);
-                let keep_running = std::sync::Arc::clone(&keep_running);
-                let movie_state  = std::sync::Arc::clone(&movie_state_arc);
+                let do_loop       = std::sync::Arc::clone(&do_loop);
+                let keep_running  = std::sync::Arc::clone(&keep_running);
+                let movie_state   = std::sync::Arc::clone(&movie_state_arc);
+                let packet_q_pair = std::sync::Arc::clone(&packet_queue_pair);
                 move || packet_thread_spawner(
                     keep_running,
                     do_loop,
                     movie_state.video_stream_idx,
                     movie_state,
+                    packet_q_pair,
                 )
             }).unwrap())
         );
@@ -247,24 +253,28 @@ pub unsafe extern "C" fn start_analyzer(analyzer_ptr: *mut AnalyzerContext) -> S
 #[no_mangle]
 #[allow(improper_ctypes_definitions)]
 pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) -> Sender<String> {
+    let movie_state = movie_state.as_mut().unwrap();
+    let (tx, rx)    = std::sync::mpsc::channel::<String>();
 
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let packet_queue_pair = Arc::new((Mutex::new(false), Condvar::new()));
+    let movie_state_arc   = std::sync::Arc::new(movie_state);
+
+
     let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let movie_state_arc    = std::sync::Arc::new(movie_state.as_mut().unwrap());
-    let movie_state1   = std::sync::Arc::clone(&movie_state_arc);
-
-    let keep_running2  = std::sync::Arc::clone(&keep_running);
-
-    let do_loop          = std::sync::Arc::new(false);
+    let do_loop      = std::sync::Arc::new(false);
     PACKET_THREADS.push(
-        Box::new(std::thread::spawn(move || packet_thread_spawner(
-            std::sync::Arc::clone(&keep_running2),
-            std::sync::Arc::clone(&do_loop),
-            movie_state1.video_stream_idx,
-            movie_state1,
-        )))
+        Box::new(std::thread::spawn({
+            let movie_state       = std::sync::Arc::clone(&movie_state_arc);
+            let keep_running      = std::sync::Arc::clone(&keep_running);
+            let packet_queue_pair = std::sync::Arc::clone(&packet_queue_pair);
+            move || packet_thread_spawner(
+                keep_running,
+                do_loop,
+                movie_state.video_stream_idx,
+                movie_state,
+                packet_queue_pair
+            )}))
     );
-
 
     let keep_running3  = std::sync::Arc::clone(&keep_running);
     let movie_state2   = std::sync::Arc::clone(&movie_state_arc);
@@ -273,7 +283,6 @@ pub unsafe extern "C" fn play_movie(movie_state: *mut MovieState) -> Sender<Stri
             decode_thread(movie_state2, keep_running3)
         }))
     );
-
 
     std::thread::spawn(move || {
         // when all tx refs are dropped, this rx will close
@@ -346,7 +355,8 @@ fn packet_thread_spawner(
     keep_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
     do_loop:std::sync::Arc<bool>,
     video_stream_idx: i64,
-    movie_state: Arc<&mut MovieState>
+    movie_state: Arc<&mut MovieState>,
+    packet_q_pair: Arc<(Mutex<bool>, Condvar)>,
 ) {
     loop {
         if !keep_running.load(std::sync::atomic::Ordering::Relaxed) {
@@ -388,7 +398,23 @@ fn packet_thread_spawner(
             {
                 if video_stream_idx == packet.stream_index as i64 {
                     while let Err(_) = movie_state_enqueue_packet(&movie_state.videoqueue, packet) {
-                        ::std::thread::sleep(::std::time::Duration::from_micros(10));
+                        ::std::thread::yield_now();
+                        // ::std::thread::sleep(::std::time::Duration::from_micros(10));
+                        let mut empty = packet_q_pair.0.lock().unwrap();
+                        // let local_empty = empty.clone();
+                        while !*empty {
+                            // let _ = packet_q_pair.1.wait(empty).unwrap();
+                            // empty = packet_q_pair.1.wait(empty).unwrap();
+                            // break;
+                            let result = packet_q_pair.1.wait_timeout(empty, ::std::time::Duration::from_millis(400)).unwrap();
+                            empty = result.0;
+                            if result.1.timed_out() {
+                                break;
+                            }
+                        }
+                        *empty = false;
+                        drop(empty);
+                        // info!("waited on condvar");
                         if !keep_running.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
                         }

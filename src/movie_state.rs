@@ -3,6 +3,7 @@ use ::std::{io::Empty, sync::Condvar};
 use std::{ops::Deref, sync::Mutex, collections::VecDeque};
 
 use log::{error, info};
+use ::rusty_ffmpeg::ffi::AVPixelFormat_AV_PIX_FMT_RGB32;
 use rusty_ffmpeg::ffi::{self};
 
 use crate::filter::init_filter;
@@ -201,7 +202,8 @@ impl MovieState {
                         frame.ptr.as_ref().unwrap().width,
                         frame.ptr.as_ref().unwrap().height,
                     ),
-                    frame.ptr.as_ref().unwrap().format,
+                    AVPixelFormat_AV_PIX_FMT_RGB32,
+                    // frame.ptr.as_ref().unwrap().format,
                 );
             }
             ffi::av_buffersrc_add_frame(in_vfilter.ptr, frame.ptr);
