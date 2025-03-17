@@ -1,5 +1,5 @@
 #![allow(unused_variables, dead_code, unused)]
-use ::std::{io::Empty, sync::Condvar};
+use ::std::{error::Error, io::Empty, sync::{Condvar, MutexGuard, TryLockError}};
 use std::{ops::Deref, sync::Mutex, collections::VecDeque};
 
 use log::{error, info};
@@ -7,7 +7,8 @@ use rusty_ffmpeg::ffi::{self};
 
 use crate::filter::init_filter;
 
-static PACKET_QUEUE_SIZE: usize = 4;
+pub static PACKET_QUEUE_SIZE: usize = 3;
+pub static FRAME_QUEUE_SIZE: usize = 9;
 #[repr(C)]
 pub struct MovieState {
     pub format_context: Mutex<FormatContextWrapper>,
@@ -45,7 +46,9 @@ impl Drop for MovieState {
             drop(video_ctx);
         }
         {
-            self.clear_packet_queue().unwrap();
+            while let Err(e) = self.clear_packet_queue() {
+
+            }
         }
         {
             self.clear_frame_queue().unwrap();
@@ -78,7 +81,7 @@ impl MovieState {
             // audio_pkt: std::ptr::null_mut(),
             video_stream: Mutex::new(StreamWrapper{ptr:std::ptr::null_mut()}),
             video_ctx: Mutex::new(CodecContextWrapper{ptr:std::ptr::null_mut()}),
-            picq: Mutex::new(VecDeque::with_capacity(3)),
+            picq: Mutex::new(VecDeque::with_capacity(FRAME_QUEUE_SIZE)),
             paused: std::sync::atomic::AtomicBool::new(false),
             in_vfilter: Mutex::new(FilterContextWrapper{ ptr:std::ptr::null_mut() }),
             out_vfilter: Mutex::new(FilterContextWrapper { ptr: std::ptr::null_mut() }),
@@ -127,8 +130,8 @@ impl MovieState {
         return Ok(());
     }
 
-    pub fn clear_packet_queue(&mut self) -> Result<(), ()> {
-        let mut vq = self.videoqueue.lock().unwrap();
+    pub fn clear_packet_queue(&mut self) -> Result<(), TryLockError<MutexGuard<VecDeque<PacketWrapper>>>> {
+        let mut vq = self.videoqueue.try_lock()?;
 
         vq.iter_mut().for_each(|p| unsafe {
             info!("free packet left in queue");
@@ -151,7 +154,7 @@ impl MovieState {
 
     pub fn enqueue_frame(&self, frame: *mut ffi::AVFrame) -> Result<(), ()> {
         let mut pq = self.picq.lock().unwrap();
-        if pq.len() >= 4 {
+        if pq.len() >= FRAME_QUEUE_SIZE {
             // eprintln!("dropping frame");
             return Err(());
         }
@@ -179,7 +182,7 @@ impl MovieState {
             return None
         }
         unsafe {
-            let dest_frame = 
+            let dest_frame =
                 ffi::av_frame_alloc()
                 .as_mut()
                 .expect("failed to allocated memory for AVFrame");
@@ -250,18 +253,21 @@ impl MovieState {
     }
 
 }
-pub fn movie_state_enqueue_packet(videoqueue: &Mutex<VecDeque<PacketWrapper>>, packet: *mut ffi::AVPacket) -> Result<(), ()> {
-    let mut vq = videoqueue.lock().unwrap();
-    if vq.len() >= PACKET_QUEUE_SIZE {
-        return Err(());
+pub fn movie_state_enqueue_packet(videoqueue: &Mutex<VecDeque<PacketWrapper>>, packet: *mut ffi::AVPacket) -> Result<(), TryLockError<MutexGuard<VecDeque<MovieState>>>> {
+    if let Ok(mut vq) = videoqueue.try_lock() {
+        if vq.len() >= PACKET_QUEUE_SIZE {
+            return Err(TryLockError::WouldBlock);
+        }
+        vq.push_back(PacketWrapper{ptr:packet});
+        return Ok(());
+    } else {
+        return Err(TryLockError::WouldBlock);
     }
-    vq.push_back(PacketWrapper{ptr:packet});
-    return Ok(());
 }
 pub fn movie_state_enqueue_frame(picq: &Mutex<VecDeque<FrameWrapper>>, frame: *mut ffi::AVFrame) -> Result<(), ()> {
 
     let mut pq = picq.lock().unwrap();
-    if pq.len() >= 4 {
+    if pq.len() >= FRAME_QUEUE_SIZE {
         // eprintln!("dropping frame");
         return Err(());
     }
